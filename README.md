@@ -1,5 +1,8 @@
-create .env with the following content:
+## Configuración del Entorno
 
+Crea un archivo `.env` en la raíz del proyecto con el siguiente contenido:
+
+```bash
 TELEGRAM_BOT_TOKEN=
 WG_API_BASE_URL=http://URL/api
 WG_API_KEY=
