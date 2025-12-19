@@ -1,0 +1,10 @@
+create .env with the following content:
+
+TELEGRAM_BOT_TOKEN=
+WG_API_BASE_URL=http://URL/api
+WG_API_KEY=
+WG_API_PREFIX=
+API_TIMEOUT=10
+LOG_FILE=wg_bot.log
+LOG_LEVEL=INFO
+MAX_PEERS_DISPLAY=10
