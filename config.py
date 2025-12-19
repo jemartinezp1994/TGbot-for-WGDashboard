@@ -23,7 +23,7 @@ WG_API_PREFIX = os.getenv("WG_API_PREFIX", "")
 # ================= SEGURIDAD ================= #
 # Diccionario de usuarios permitidos {user_id: "nombre"}
 ALLOWED_USERS: Dict[int, str] = {
-    762494594: "Admin Principal",
+    : "Admin Principal",
     # Agrega más usuarios aquí:
     # 987654321: "Otro Admin",
 }
