@@ -168,14 +168,48 @@ def format_system_status(status_data: Dict) -> str:
             free = format_size(disk.get('free', 0))
             lines.append(f"   {mount}: {percent}% usado ({free} libre)")
     
-    # Interfaces de red
+    # Interfaces de red - MODIFICADO PARA MOSTRAR TODAS LAS INTERFACES
     interfaces = status_data.get('NetworkInterfaces', {})
     if interfaces:
         lines.append("\n📡 **Interfaces de Red:**")
-        for iface_name, iface_data in list(interfaces.items())[:3]:  # Mostrar solo 3
-            sent = format_size(iface_data.get('bytes_sent', 0))
-            recv = format_size(iface_data.get('bytes_recv', 0))
-            lines.append(f"   {iface_name}: ⬆{sent} ⬇{recv}")
+        
+        # Ordenar interfaces para mostrar primero las importantes
+        interface_order = ['lo', 'ens3', 'eth0', 'eth1']  # Interfaces principales
+        wg_interfaces = []
+        other_interfaces = []
+        
+        for iface_name, iface_data in interfaces.items():
+            if iface_name.startswith('wg'):
+                wg_interfaces.append((iface_name, iface_data))
+            elif iface_name not in interface_order:
+                other_interfaces.append((iface_name, iface_data))
+        
+        # Mostrar interfaces en orden específico
+        for iface_name in interface_order:
+            if iface_name in interfaces:
+                iface_data = interfaces[iface_name]
+                sent = format_size(iface_data.get('bytes_sent', 0))
+                recv = format_size(iface_data.get('bytes_recv', 0))
+                lines.append(f"   {iface_name}: ⬆{sent} ⬇{recv}")
+        
+        # Mostrar todas las interfaces WireGuard
+        if wg_interfaces:
+            lines.append("\n🔗 **Interfaces WireGuard:**")
+            for iface_name, iface_data in sorted(wg_interfaces):
+                sent = format_size(iface_data.get('bytes_sent', 0))
+                recv = format_size(iface_data.get('bytes_recv', 0))
+                lines.append(f"   {iface_name}: ⬆{sent} ⬇{recv}")
+        
+        # Mostrar otras interfaces (limitado a 5 para no hacer muy largo el mensaje)
+        if other_interfaces:
+            lines.append("\n🌐 **Otras Interfaces:**")
+            for iface_name, iface_data in sorted(other_interfaces)[:5]:  # Máximo 5
+                sent = format_size(iface_data.get('bytes_sent', 0))
+                recv = format_size(iface_data.get('bytes_recv', 0))
+                lines.append(f"   {iface_name}: ⬆{sent} ⬇{recv}")
+            
+            if len(other_interfaces) > 5:
+                lines.append(f"   ... y {len(other_interfaces) - 5} más")
     
     return "\n".join(lines)
 

@@ -207,6 +207,7 @@ class WGApiClient:
         data = result.get("data", {})
         config_info = data.get("configurationInfo", {})
         peers = data.get("configurationPeers", [])
+        restricted_peers = data.get("configurationRestrictedPeers", [])
         
         # Convertir latest_handshake de string a segundos para facilitar el procesamiento
         for peer in peers:
@@ -245,13 +246,72 @@ class WGApiClient:
             "status": True,
             "message": None,
             "data": peers,
+            "restricted_data": restricted_peers,
             "metadata": {
-                "total": len(peers),
+                "total": len(peers) + len(restricted_peers),
                 "connected": connected_peers,
+                "restricted": len(restricted_peers),
                 "config_name": config_name,
                 "config_data": config_info
             }
         }
+    
+    def get_restricted_peers(self, config_name: str) -> Dict:
+        """Obtiene solo los peers restringidos de una configuración"""
+        endpoint = f"/getWireguardConfigurationInfo?configurationName={config_name}"
+        
+        result = self._make_request("GET", endpoint)
+        
+        if not result.get("status"):
+            logger.error(f"[API] Error en getWireguardConfigurationInfo: {result.get('message')}")
+            return result
+        
+        data = result.get("data", {})
+        restricted_peers = data.get("configurationRestrictedPeers", [])
+        
+        return {
+            "status": True,
+            "message": None,
+            "data": restricted_peers,
+            "metadata": {
+                "total": len(restricted_peers),
+                "config_name": config_name
+            }
+        }
+    
+    def restrict_peer(self, config_name: str, public_key: str) -> Dict:
+        """Restringe un peer específico"""
+        endpoint = f"/restrictPeers/{config_name}"
+        payload = {
+            "peers": [public_key]
+        }
+        
+        logger.info(f"[API] Restringiendo peer en {config_name}: {public_key[:30]}...")
+        
+        result = self._make_request("POST", endpoint, json=payload)
+        
+        # Invalidar cache de configuraciones
+        if "configurations" in self._cache:
+            del self._cache["configurations"]
+        
+        return result
+    
+    def allow_access_peer(self, config_name: str, public_key: str) -> Dict:
+        """Quita la restricción de un peer específico"""
+        endpoint = f"/allowAccessPeers/{config_name}"
+        payload = {
+            "peers": [public_key]
+        }
+        
+        logger.info(f"[API] Quitando restricción a peer en {config_name}: {public_key[:30]}...")
+        
+        result = self._make_request("POST", endpoint, json=payload)
+        
+        # Invalidar cache de configuraciones
+        if "configurations" in self._cache:
+            del self._cache["configurations"]
+        
+        return result
     
     def delete_peer(self, config_name: str, public_key: str) -> Dict:
         """Elimina un peer específico"""

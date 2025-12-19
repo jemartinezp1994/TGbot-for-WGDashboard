@@ -44,13 +44,110 @@ def config_menu(config_name: str) -> InlineKeyboardMarkup:
     """Menú para una configuración específica"""
     keyboard = [
         [InlineKeyboardButton("📥 Descargar Peers", callback_data=f"peers:{config_name}")],
-        [InlineKeyboardButton("📋 Detalles completos", callback_data=f"peers_detailed:{config_name}")],
+        # Cambio: Llamar directamente a la vista paginada en lugar de al menú intermedio
+	[InlineKeyboardButton("📋 Detalles Peers", callback_data=f"peers_detailed_paginated:{config_name}:0")],
         [InlineKeyboardButton("🗑 Eliminar Peer", callback_data=f"delete_peer:{config_name}")],
         [InlineKeyboardButton("➕ Agregar Peer", callback_data=f"add_peer:{config_name}")],
         [InlineKeyboardButton("⏰ Schedule Jobs", callback_data=f"schedule_jobs_menu:{config_name}")],
+        # NUEVO: Botón de restricciones
+        [InlineKeyboardButton("🚫 Restricciones", callback_data=f"restrictions:{config_name}")],
         [InlineKeyboardButton("🔄 Actualizar", callback_data=f"cfg:{config_name}")],
         [InlineKeyboardButton("⬅️ Volver", callback_data="configs")]
     ]
+    return InlineKeyboardMarkup(keyboard)
+
+def restrictions_menu(config_name: str) -> InlineKeyboardMarkup:
+    """Menú de restricciones para una configuración"""
+    keyboard = [
+        [InlineKeyboardButton("👥 Restringidos", callback_data=f"restricted_peers:{config_name}:0")],
+        [InlineKeyboardButton("🔒 Restringir Peer", callback_data=f"restrict_peer_menu:{config_name}:0")],
+        [InlineKeyboardButton("⬅️ Volver", callback_data=f"cfg:{config_name}")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# En keyboards.py, actualiza estas funciones:
+
+def paginated_restricted_peers_menu(peers: List[Dict], config_name: str, page: int) -> InlineKeyboardMarkup:
+    """Crea un teclado paginado con peers restringidos - VERSIÓN SIMPLIFICADA"""
+    keyboard = []
+    start_idx = page * 6  # REDUCIDO a 6 items por página
+    end_idx = start_idx + 6
+    page_peers = peers[start_idx:end_idx]
+    
+    for i, peer in enumerate(page_peers, start_idx):
+        peer_name = peer.get('name', f'Peer {i+1}')
+        # Usar solo el índice en callback_data - MUY CORTO
+        button_text = f"🔓 {peer_name[:15]}"
+        keyboard.append([
+            InlineKeyboardButton(
+                button_text,
+                callback_data=f"unrestrict:{config_name}:{i}"
+            )
+        ])
+    
+    # Botones de navegación
+    nav_buttons = []
+    
+    if page > 0:
+        nav_buttons.append(
+            InlineKeyboardButton("◀️", callback_data=f"page_res:{config_name}:{page-1}")
+        )
+    
+    if end_idx < len(peers):
+        nav_buttons.append(
+            InlineKeyboardButton("▶️", callback_data=f"page_res:{config_name}:{page+1}")
+        )
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    # Botones de acción
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Volver", callback_data=f"restrictions:{config_name}")
+    ])
+    
+    return InlineKeyboardMarkup(keyboard)
+
+
+def paginated_unrestricted_peers_menu(peers: List[Dict], config_name: str, page: int) -> InlineKeyboardMarkup:
+    """Crea un teclado paginado con peers NO restringidos - VERSIÓN SIMPLIFICADA"""
+    keyboard = []
+    start_idx = page * 6  # REDUCIDO a 6 items por página
+    end_idx = start_idx + 6
+    page_peers = peers[start_idx:end_idx]
+    
+    for i, peer in enumerate(page_peers, start_idx):
+        peer_name = peer.get('name', f'Peer {i+1}')
+        # Usar solo el índice en callback_data - MUY CORTO
+        button_text = f"🔒 {peer_name[:15]}"
+        keyboard.append([
+            InlineKeyboardButton(
+                button_text,
+                callback_data=f"restrict:{config_name}:{i}"
+            )
+        ])
+    
+    # Botones de navegación
+    nav_buttons = []
+    
+    if page > 0:
+        nav_buttons.append(
+            InlineKeyboardButton("◀️", callback_data=f"page_unres:{config_name}:{page-1}")
+        )
+    
+    if end_idx < len(peers):
+        nav_buttons.append(
+            InlineKeyboardButton("▶️", callback_data=f"page_unres:{config_name}:{page+1}")
+        )
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    # Botones de acción
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Volver", callback_data=f"restrictions:{config_name}")
+    ])
+    
     return InlineKeyboardMarkup(keyboard)
 
 def paginated_configs_menu(configs: List[Dict], page: int = 0) -> InlineKeyboardMarkup:
@@ -144,14 +241,35 @@ def peers_selection_menu(peers: List[Dict], config_name: str, action: str, page:
     
     return InlineKeyboardMarkup(keyboard)
 
-def confirmation_menu(config_name: str, peer_index: str, action: str) -> InlineKeyboardMarkup:
-    """Menú de confirmación para acciones críticas"""
+def confirmation_menu(config_name: str, peer_identifier: str, action_type: str, action_text: str = None) -> InlineKeyboardMarkup:
+    """Crea un menú de confirmación para acciones críticas"""
+    # Si no se proporciona action_text, usar un valor por defecto basado en action_type
+    if action_text is None:
+        action_text_map = {
+            "delete_peer": "Eliminar",
+            "unrestrict": "Quitar Restricción",
+            "restrict": "Restringir",
+            "delete_schedule_job": "Eliminar Job"
+        }
+        action_text = action_text_map.get(action_type, "Confirmar")
+    
+    # Codificar el identificador si es necesario
+    from keyboards import safe_callback_data
+    safe_identifier = safe_callback_data(peer_identifier)
+    
     keyboard = [
         [
-            InlineKeyboardButton("✅ Confirmar", callback_data=f"{action}_final:{config_name}:{peer_index}"),
-            InlineKeyboardButton("❌ Cancelar", callback_data=f"cfg:{config_name}")
+            InlineKeyboardButton(
+                f"✅ Sí, {action_text.lower()}",
+                callback_data=f"{action_type}_execute:{config_name}:{safe_identifier}"
+            ),
+            InlineKeyboardButton(
+                f"❌ Cancelar",
+                callback_data=f"cfg:{config_name}"
+            )
         ]
     ]
+    
     return InlineKeyboardMarkup(keyboard)
 
 def back_button(target: str = "main_menu") -> InlineKeyboardMarkup:

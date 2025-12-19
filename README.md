@@ -1,22 +1,26 @@
-## Configuración del Entorno
+# 🤖 Bot WGDashboard para Telegram
 
-Crea un archivo `.env` en la raíz del proyecto con el siguiente contenido:
+Bot de Telegram para gestionar y monitorear WGDashboard de forma remota.
 
+## ✨ Características
+
+- 📡 Ver y gestionar configuraciones WireGuard
+- 👤 Administrar peers (listar, ver detalles, eliminar)
+- 🖥 Monitorear estado del sistema (CPU, memoria, discos, red)
+- ⚡ Ver protocolos habilitados
+- 📊 Estadísticas detalladas
+- 🔐 Acceso restringido a usuarios autorizados
+
+## 📋 Requisitos
+
+- Python 3.8+
+- WGDashboard v4.2.0 o superior
+- API Key de WGDashboard habilitada
+- Token de Bot de Telegram
+
+## 🚀 Instalación
+
+1. **Clonar o descargar los archivos**
 ```bash
-TELEGRAM_BOT_TOKEN=
-WG_API_BASE_URL=http://URL/api
-WG_API_KEY=
-WG_API_PREFIX=
-API_TIMEOUT=10
-LOG_FILE=wg_bot.log
-LOG_LEVEL=INFO
-MAX_PEERS_DISPLAY=10
-
-```
-
-en config.py
-
-line 26  add id telegram owner
-```
-    yourID: "Admin Principal",
-```
+git clone [tu-repositorio]
+cd wgdashboard-bot

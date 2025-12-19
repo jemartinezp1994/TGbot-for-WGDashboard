@@ -21,9 +21,10 @@ import io
 from config import ALLOWED_USERS
 from wg_api import api_client
 from keyboards import (
-    main_menu, config_menu, paginated_configs_menu,
-    peers_selection_menu, confirmation_menu, back_button, refresh_button,
-    InlineKeyboardMarkup
+    main_menu, config_menu, paginated_configs_menu, restrictions_menu,
+    paginated_restricted_peers_menu, paginated_unrestricted_peers_menu,
+    confirmation_menu, back_button, refresh_button,
+    InlineKeyboardMarkup, decode_callback_data
 )
 from utils import (
     is_allowed, get_user_name, format_peer_info,
@@ -54,6 +55,90 @@ def format_peer_for_list(peer: Dict) -> str:
 
 def format_peer_for_detail(peer: Dict) -> str:
     """Formatea un peer para vista detallada"""
+    lines = []
+    
+    # Información básica
+    name = peer.get('name', 'Sin nombre')
+    public_key = peer.get('id', 'N/A')
+    
+    lines.append(f"👤 Nombre: {name}")
+    lines.append(f"🔑 Clave pública: {public_key}")
+    
+    # Endpoint
+    endpoint = peer.get('endpoint', 'N/A')
+    lines.append(f"📍 Endpoint: {endpoint}")
+    
+    # IPs permitidas
+    allowed_ip = peer.get('allowed_ip', 'N/A')
+    lines.append(f"🌐 IP permitida: {allowed_ip}")
+    
+    # Estado
+    status = peer.get('status', 'stopped')
+    latest_handshake = peer.get('latest_handshake_seconds', 0)
+    
+    if status == 'running' and latest_handshake > 0:
+        lines.append(f"📊 Estado: ✅ Conectado")
+        lines.append(f"🔗 Última conexión: {format_time_ago(latest_handshake)}")
+    else:
+        lines.append(f"📊 Estado: ❌ Desconectado")
+        if latest_handshake > 0:
+            lines.append(f"🔗 Última conexión: {format_time_ago(latest_handshake)}")
+        else:
+            lines.append(f"🔗 Última conexión: Nunca")
+    
+    # Transferencias
+    transfer_received = peer.get('total_receive', 0)
+    transfer_sent = peer.get('total_sent', 0)
+    
+    lines.append(f"⬇️ Recibido: {format_bytes_human(transfer_received)}")
+    lines.append(f"⬆️ Enviado: {format_bytes_human(transfer_sent)}")
+    
+    # Keepalive (si existe)
+    keepalive = peer.get('keepalive')
+    if keepalive:
+        lines.append(f"♻️ Keepalive: {keepalive} segundos")
+    
+    # Remote endpoint
+    remote_endpoint = peer.get('remote_endpoint', 'N/A')
+    if remote_endpoint != 'N/A':
+        lines.append(f"🌍 Remote endpoint: {remote_endpoint}")
+    
+    # DNS
+    dns = peer.get('DNS', 'N/A')
+    if dns != 'N/A':
+        lines.append(f"🔗 DNS: {dns}")
+    
+    # MTU
+    mtu = peer.get('mtu', 'N/A')
+    if mtu != 'N/A':
+        lines.append(f"📡 MTU: {mtu}")
+    
+    # Jobs (trabajos/restricciones)
+    jobs = peer.get('jobs', [])
+    if jobs:
+        lines.append(f"\n⏰ Schedule Jobs activos: {len(jobs)}")
+        for job in jobs:
+            action = job.get('Action', '')
+            field = job.get('Field', '')
+            value = job.get('Value', 'N/A')
+            operator = job.get('Operator', 'lgt')
+            
+            if field == "total_data":
+                field_text = "Límite de datos (GB)"
+                value_display = f"{value} GB"
+            elif field == "date":
+                field_text = "Fecha de expiración"
+                value_display = value
+            else:
+                field_text = field
+                value_display = value
+            
+            lines.append(f"   • {action.upper()} {field_text}: {value_display}")
+    
+    return "\n".join(lines)
+
+def format_peer_for_detail_plain(peer: Dict) -> str:
+    """Formatea un peer para vista detallada SIN formato Markdown"""
     lines = []
     
     # Información básica
@@ -228,6 +313,7 @@ Con este bot puedes gestionar tus configuraciones WireGuard de manera remota.
 • ⚡ Ver protocolos habilitados
 • 📊 Estadísticas detalladas
 • ⏰ Schedule Jobs (trabajos programados)
+• 🚫 Gestionar restricciones de peers
 
 Selecciona una opción del menú o usa /help para ver todos los comandos."""
     
@@ -258,6 +344,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • 🖥 Estado del Sistema - Monitoreo en tiempo real
 • ⚡ Protocolos - Ver protocolos habilitados
 • 📊 Estadísticas - Estadísticas detalladas
+• 🚫 Restricciones - Gestionar peers restringidos
 
 *Acciones por configuración:*
 • 👤 Listar Peers - Ver lista de peers
@@ -265,7 +352,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • 🗑 Eliminar Peer - Eliminar un peer
 • ➕ Agregar Peer - Agregar nuevo peer automáticamente
 • ⏰ Schedule Jobs - Gestionar trabajos programados
+• 🚫 Restricciones - Ver y gestionar peers restringidos
 • 🔄 Actualizar - Refrescar información
+
+*Nuevo: Gestión de Restricciones*
+• 👥 Restringidos - Ver peers restringidos y quitar restricción
+• 🔒 Restringir Peer - Restringir acceso a un peer
 
 *Notas:*
 - Solo usuarios autorizados pueden usar este bot
@@ -329,7 +421,6 @@ async def callback_handler(update: Update, context: CallbackContext):
     callback_data = query.data
     log_callback(update, callback_data)
     
-    # DEBUG: Agrega esta línea para ver el callback_data exacto
     logger.debug(f"CALLBACK DEBUG: {callback_data}")
     
     try:
@@ -358,7 +449,57 @@ async def callback_handler(update: Update, context: CallbackContext):
         elif callback_data == "help":
             await handle_help(query)
         
-        # --- MANEJO DE PAGINACIÓN ---
+        # --- MANEJO DE RESTRICCIONES (VERSIÓN SIMPLIFICADA) ---
+        elif callback_data.startswith("restrictions:"):
+            parts = callback_data.split(":")
+            if len(parts) > 1:
+                await handle_restrictions_menu(query, parts[1])
+        
+        elif callback_data.startswith("restricted_peers:"):
+            parts = callback_data.split(":")
+            if len(parts) >= 3:
+                config_name = parts[1]
+                page = int(parts[2])
+                await handle_restricted_peers_list(query, context, config_name, page)
+        
+        elif callback_data.startswith("restrict_peer_menu:"):
+            parts = callback_data.split(":")
+            if len(parts) >= 3:
+                config_name = parts[1]
+                page = int(parts[2])
+                await handle_unrestricted_peers_list(query, context, config_name, page)
+        
+        # --- NUEVAS RUTAS SIMPLIFICADAS ---
+        elif callback_data.startswith("unrestrict:"):
+            parts = callback_data.split(":")
+            if len(parts) >= 3:
+                config_name = parts[1]
+                peer_index = int(parts[2])
+                await handle_unrestrict_simple(query, context, config_name, peer_index)
+        
+        elif callback_data.startswith("restrict:"):
+            parts = callback_data.split(":")
+            if len(parts) >= 3:
+                config_name = parts[1]
+                peer_index = int(parts[2])
+                await handle_restrict_simple(query, context, config_name, peer_index)
+        
+        # --- PAGINACIÓN SIMPLIFICADA ---
+        elif callback_data.startswith("page_res:"):
+            parts = callback_data.split(":")
+            if len(parts) >= 3:
+                config_name = parts[1]
+                page = int(parts[2])
+                await handle_restricted_peers_list(query, context, config_name, page)
+        
+        elif callback_data.startswith("page_unres:"):
+            parts = callback_data.split(":")
+            if len(parts) >= 3:
+                config_name = parts[1]
+                page = int(parts[2])
+                await handle_unrestricted_peers_list(query, context, config_name, page)
+        
+        # --- MANEJO DE PAGINACIÓN ORIGINAL ---
         elif callback_data.startswith("page_configs:"):
             parts = callback_data.split(":")
             page = int(parts[1]) if len(parts) > 1 else 0
@@ -402,13 +543,29 @@ async def callback_handler(update: Update, context: CallbackContext):
         elif callback_data.startswith("peers:"):
             parts = callback_data.split(":")
             if len(parts) > 1:
-                await handle_peers_list(query, context, parts[1], 0)  # CORREGIDO: Indentación
+                await handle_peers_list(query, context, parts[1], 0)
         
         elif callback_data.startswith("peers_detailed:"):
             parts = callback_data.split(":")
             if len(parts) > 1:
-                await handle_peers_detailed(query, parts[1])
+                config_name = parts[1]
+                await handle_peers_detailed(query, config_name)
         
+        elif callback_data.startswith("peers_detailed_full:"):
+            parts = callback_data.split(":")
+            if len(parts) >= 2:
+                config_name = parts[1]
+                await handle_peers_detailed_full(query, config_name)
+        
+        # --- MANEJO DE DETALLES PAGINADOS (AGREGADO PARA CORREGIR EL ERROR) ---
+        elif callback_data.startswith("peers_detailed_paginated:"):
+            parts = callback_data.split(":")
+            if len(parts) >= 3:
+                config_name = parts[1]
+                page = int(parts[2])
+                await handle_peers_detailed_paginated(query, config_name, page)
+        
+        # --- MANEJO DE ELIMINACIÓN DE PEERS ---
         elif callback_data.startswith("delete_peer:"):
             parts = callback_data.split(":")
             if len(parts) > 1:
@@ -421,11 +578,12 @@ async def callback_handler(update: Update, context: CallbackContext):
                 peer_index = parts[2]
                 await handle_delete_peer_confirm(query, config_name, peer_index)
         
-        elif callback_data.startswith("delete_peer_final:"):
+        elif callback_data.startswith("delete_peer_execute:"):
             parts = callback_data.split(":")
             if len(parts) >= 3:
                 config_name = parts[1]
-                peer_index = parts[2]
+                peer_index_encoded = parts[2]
+                peer_index = decode_callback_data(peer_index_encoded)
                 await handle_delete_peer_final(query, config_name, peer_index)
         
         # --- MANEJO DE AGREGAR PEER (AUTOMÁTICO) ---
@@ -477,41 +635,14 @@ async def callback_handler(update: Update, context: CallbackContext):
                 await handle_add_schedule_job_date(query, context, config_name, peer_index)
         
         # --- MANEJO DE ELIMINACIÓN DE SCHEDULE JOBS ---
-        # Caso especial para debug: captura cualquier callback que empiece con delete_schedule_job
-        elif callback_data.startswith("delete_schedule_job"):
-            logger.debug(f"DEBUG - Callback de eliminación recibido: {callback_data}")
+        elif callback_data.startswith("delete_schedule_job_final:"):
             parts = callback_data.split(":")
-            
-            if len(parts) == 4:
-                # Formato: delete_schedule_job_X:config_name:peer_index:job_index
-                action = parts[0]
+            if len(parts) >= 4:
                 config_name = parts[1]
                 peer_index = parts[2]
                 job_index = parts[3]
-                
-                if "confirm" in action:
-                    await handle_delete_schedule_job_confirm(query, context, config_name, peer_index, job_index)
-                elif "execute" in action:
-                    await handle_delete_schedule_job_execute(query, context, config_name, peer_index, job_index)
-                else:
-                    # Si no reconoce la acción, tratar como confirm
-                    await handle_delete_schedule_job_confirm(query, context, config_name, peer_index, job_index)
-            
-            elif len(parts) == 3:
-                # Formato: delete_schedule_job_all:config_name:peer_index
-                config_name = parts[1]
-                peer_index = parts[2]
-                await handle_delete_schedule_job_confirm(query, context, config_name, peer_index, "all")
-            
-            else:
-                logger.error(f"Formato de callback de eliminación desconocido: {callback_data}")
-                await query.edit_message_text(
-                    f"❌ Error: Formato de callback desconocido: {callback_data}",
-                    reply_markup=back_button("main_menu")
-                )
+                await handle_delete_schedule_job_execute(query, context, config_name, peer_index, job_index)
         
-        # --- CASOS ESPECÍFICOS PARA COMPATIBILIDAD ---
-        # Casos específicos para mayor claridad (opcional, pero mantiene compatibilidad)
         elif callback_data.startswith("delete_schedule_job_all:"):
             parts = callback_data.split(":")
             if len(parts) >= 3:
@@ -550,7 +681,384 @@ async def callback_handler(update: Update, context: CallbackContext):
             reply_markup=back_button("main_menu")
         )
 
-# ================= HANDLERS ESPECÍFICOS ================= #
+# ================= HANDLERS DE RESTRICCIONES ================= #
+async def handle_restrictions_menu(query, config_name: str):
+    """Muestra el menú de restricciones"""
+    await query.edit_message_text(
+        f"🚫 *Restricciones - {config_name}*\n\n"
+        f"Selecciona una opción para gestionar restricciones:",
+        reply_markup=restrictions_menu(config_name),
+        parse_mode="Markdown"
+    )
+
+async def handle_restricted_peers_list(query, context: CallbackContext, config_name: str, page: int = 0):
+    """Muestra la lista paginada de peers restringidos - VERSIÓN SIMPLIFICADA"""
+    await query.edit_message_text(f"👥 Obteniendo peers restringidos...")
+    
+    result = api_client.get_peers(config_name)
+    
+    if not result.get("status"):
+        await query.edit_message_text(
+            f"❌ Error: {result.get('message', 'Error desconocido')}",
+            reply_markup=back_button(f"restrictions:{config_name}")
+        )
+        return
+    
+    restricted_peers = result.get("restricted_data", [])
+    
+    if not restricted_peers:
+        await query.edit_message_text(
+            f"✅ *No hay peers restringidos*\n\nTodos los peers tienen acceso normal.",
+            reply_markup=back_button(f"restrictions:{config_name}"),
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Guardar en el contexto para uso posterior
+    context.user_data[f'restricted_peers_{config_name}'] = restricted_peers
+    
+    total_peers = len(restricted_peers)
+    total_pages = (total_peers - 1) // 6 + 1  # Cambiado a 6
+    
+    if page >= total_pages:
+        page = total_pages - 1
+    
+    keyboard = paginated_restricted_peers_menu(restricted_peers, config_name, page)
+    
+    message = f"🚫 *Peers Restringidos - {config_name}*\n\n"
+    message += f"📊 Total: {total_peers}\n"
+    message += f"📄 Página {page + 1} de {total_pages}\n\n"
+    message += "Selecciona un peer para quitar restricción:"
+    
+    await query.edit_message_text(
+        message,
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+async def handle_unrestricted_peers_list(query, context: CallbackContext, config_name: str, page: int = 0):
+    """Muestra la lista paginada de peers NO restringidos - VERSIÓN SIMPLIFICADA"""
+    await query.edit_message_text(f"🔒 Obteniendo peers...")
+    
+    result = api_client.get_peers(config_name)
+    
+    if not result.get("status"):
+        await query.edit_message_text(
+            f"❌ Error: {result.get('message', 'Error desconocido')}",
+            reply_markup=back_button(f"restrictions:{config_name}")
+        )
+        return
+    
+    all_peers = result.get("data", [])
+    restricted_peers = result.get("restricted_data", [])
+    
+    # Obtener claves de peers restringidos
+    restricted_keys = {peer.get('id') for peer in restricted_peers}
+    
+    # Filtrar peers no restringidos
+    unrestricted_peers = []
+    for peer in all_peers:
+        if peer.get('id') not in restricted_keys:
+            unrestricted_peers.append(peer)
+    
+    if not unrestricted_peers:
+        await query.edit_message_text(
+            f"ℹ️ *Todos los peers están restringidos*\n\nNo hay peers disponibles.",
+            reply_markup=back_button(f"restrictions:{config_name}"),
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Guardar en el contexto
+    context.user_data[f'unrestricted_peers_{config_name}'] = unrestricted_peers
+    
+    total_peers = len(unrestricted_peers)
+    total_pages = (total_peers - 1) // 6 + 1  # Cambiado a 6
+    
+    if page >= total_pages:
+        page = total_pages - 1
+    
+    keyboard = paginated_unrestricted_peers_menu(unrestricted_peers, config_name, page)
+    
+    message = f"🔒 *Restringir Peer - {config_name}*\n\n"
+    message += f"📊 Disponibles: {total_peers}\n"
+    message += f"📄 Página {page + 1} de {total_pages}\n\n"
+    message += "Selecciona un peer para restringir:"
+    
+    await query.edit_message_text(
+        message,
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+async def handle_unrestrict_simple(query, context: CallbackContext, config_name: str, peer_index: int):
+    """Quitar restricción de forma simplificada"""
+    await query.edit_message_text(f"🔓 Quitando restricción...")
+    
+    # Obtener peers del contexto
+    restricted_peers = context.user_data.get(f'restricted_peers_{config_name}', [])
+    
+    if peer_index < 0 or peer_index >= len(restricted_peers):
+        await query.edit_message_text(
+            f"❌ Índice de peer inválido",
+            reply_markup=back_button(f"restricted_peers:{config_name}:0")
+        )
+        return
+    
+    peer = restricted_peers[peer_index]
+    public_key = peer.get('id', '')
+    peer_name = peer.get('name', 'Desconocido')
+    
+    if not public_key:
+        await query.edit_message_text(
+            f"❌ No se pudo obtener la clave pública",
+            reply_markup=back_button(f"restricted_peers:{config_name}:0")
+        )
+        return
+    
+    # Llamar a la API
+    result = api_client.allow_access_peer(config_name, public_key)
+    
+    if result.get("status"):
+        await query.edit_message_text(
+            f"✅ *Restricción quitada*\n\nPeer: {peer_name}\nAhora puede conectarse.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Actualizar lista", callback_data=f"restricted_peers:{config_name}:0")],
+                [InlineKeyboardButton("⬅️ Volver", callback_data=f"restrictions:{config_name}")]
+            ]),
+            parse_mode="Markdown"
+        )
+    else:
+        error_msg = result.get('message', 'Error desconocido')
+        await query.edit_message_text(
+            f"❌ *Error*\n\n{error_msg}",
+            reply_markup=back_button(f"restricted_peers:{config_name}:0"),
+            parse_mode="Markdown"
+        )
+
+async def handle_restrict_simple(query, context: CallbackContext, config_name: str, peer_index: int):
+    """Restringir peer de forma simplificada"""
+    await query.edit_message_text(f"🔒 Restringiendo peer...")
+    
+    # Obtener peers del contexto
+    unrestricted_peers = context.user_data.get(f'unrestricted_peers_{config_name}', [])
+    
+    if peer_index < 0 or peer_index >= len(unrestricted_peers):
+        await query.edit_message_text(
+            f"❌ Índice de peer inválido",
+            reply_markup=back_button(f"restrict_peer_menu:{config_name}:0")
+        )
+        return
+    
+    peer = unrestricted_peers[peer_index]
+    public_key = peer.get('id', '')
+    peer_name = peer.get('name', 'Desconocido')
+    
+    if not public_key:
+        await query.edit_message_text(
+            f"❌ No se pudo obtener la clave pública",
+            reply_markup=back_button(f"restrict_peer_menu:{config_name}:0")
+        )
+        return
+    
+    # Llamar a la API
+    result = api_client.restrict_peer(config_name, public_key)
+    
+    if result.get("status"):
+        await query.edit_message_text(
+            f"✅ *Peer restringido*\n\nPeer: {peer_name}\nYa no podrá conectarse.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Actualizar lista", callback_data=f"restrict_peer_menu:{config_name}:0")],
+                [InlineKeyboardButton("⬅️ Volver", callback_data=f"restrictions:{config_name}")]
+            ]),
+            parse_mode="Markdown"
+        )
+    else:
+        error_msg = result.get('message', 'Error desconocido')
+        await query.edit_message_text(
+            f"❌ *Error*\n\n{error_msg}",
+            reply_markup=back_button(f"restrict_peer_menu:{config_name}:0"),
+            parse_mode="Markdown"
+        )
+
+async def handle_unrestrict_confirm(query, context: CallbackContext, config_name: str, public_key_short: str, peer_index: str):
+    """Muestra confirmación para quitar restricción a un peer"""
+    await query.edit_message_text(f"🔍 Buscando información del peer...")
+    
+    # Obtener información del peer
+    result = api_client.get_peers(config_name)
+    if not result.get("status"):
+        await query.edit_message_text(
+            f"❌ Error: {result.get('message', 'Error desconocido')}",
+            reply_markup=back_button(f"restricted_peers:{config_name}:0")
+        )
+        return
+    
+    restricted_peers = result.get("restricted_data", [])
+    
+    # Buscar el peer específico usando el índice
+    try:
+        idx = int(peer_index)
+        if idx < 0 or idx >= len(restricted_peers):
+            await query.edit_message_text(
+                f"❌ Índice de peer inválido",
+                reply_markup=back_button(f"restricted_peers:{config_name}:0")
+            )
+            return
+        
+        peer_info = restricted_peers[idx]
+        public_key = peer_info.get('id', '')
+        peer_name = peer_info.get('name', 'Desconocido')
+        
+        if not public_key:
+            await query.edit_message_text(
+                f"❌ No se pudo obtener la clave pública del peer",
+                reply_markup=back_button(f"restricted_peers:{config_name}:0")
+            )
+            return
+        
+        allowed_ip = peer_info.get('allowed_ip', 'N/A')
+        
+        message = f"⚠️ *Confirmar Quitar Restricción*\n\n"
+        message += f"¿Estás seguro de que deseas quitar la restricción a este peer?\n\n"
+        message += f"*Peer:* {peer_name}\n"
+        message += f"*Configuración:* {config_name}\n"
+        message += f"*IP:* `{allowed_ip}`\n"
+        message += f"*Clave pública:* `{public_key[:30]}...`\n\n"
+        message += "ℹ️ *Al quitar la restricción, el peer podrá conectarse nuevamente.*"
+        
+        # Codificar la clave pública completa
+        from keyboards import safe_callback_data
+        safe_public_key = safe_callback_data(public_key)
+        
+        keyboard = confirmation_menu(config_name, safe_public_key, "unrestrict", "Quitar Restricción")
+        
+        await query.edit_message_text(
+            message,
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error en confirmación de quitar restricción: {str(e)}")
+        await query.edit_message_text(
+            f"❌ Error al procesar la solicitud: {str(e)}",
+            reply_markup=back_button(f"restricted_peers:{config_name}:0")
+        )
+
+async def handle_unrestrict_execute(query, config_name: str, public_key: str):
+    """Ejecuta la acción de quitar restricción a un peer"""
+    await query.edit_message_text(f"🔄 Quitando restricción al peer...")
+    
+    result = api_client.allow_access_peer(config_name, public_key)
+    
+    if result.get("status"):
+        await query.edit_message_text(
+            f"✅ *Restricción quitada correctamente*\n\n"
+            f"El peer ahora puede conectarse a {config_name}.",
+            reply_markup=back_button(f"restricted_peers:{config_name}:0"),
+            parse_mode="Markdown"
+        )
+    else:
+        error_msg = result.get('message', 'Error desconocido')
+        await query.edit_message_text(
+            f"❌ *Error al quitar restricción*\n\n"
+            f"*Error:* {error_msg}",
+            reply_markup=back_button(f"restricted_peers:{config_name}:0"),
+            parse_mode="Markdown"
+        )
+
+async def handle_restrict_confirm(query, context: CallbackContext, config_name: str, public_key_short: str, peer_index: str):
+    """Muestra confirmación para restringir un peer"""
+    await query.edit_message_text(f"🔍 Buscando información del peer...")
+    
+    # Obtener información del peer
+    result = api_client.get_peers(config_name)
+    if not result.get("status"):
+        await query.edit_message_text(
+            f"❌ Error: {result.get('message', 'Error desconocido')}",
+            reply_markup=back_button(f"restrict_peer_menu:{config_name}:0")
+        )
+        return
+    
+    all_peers = result.get("data", [])
+    
+    # Buscar el peer específico usando el índice
+    try:
+        idx = int(peer_index)
+        if idx < 0 or idx >= len(all_peers):
+            await query.edit_message_text(
+                f"❌ Índice de peer inválido",
+                reply_markup=back_button(f"restrict_peer_menu:{config_name}:0")
+            )
+            return
+        
+        peer_info = all_peers[idx]
+        public_key = peer_info.get('id', '')
+        peer_name = peer_info.get('name', 'Desconocido')
+        
+        if not public_key:
+            await query.edit_message_text(
+                f"❌ No se pudo obtener la clave pública del peer",
+                reply_markup=back_button(f"restrict_peer_menu:{config_name}:0")
+            )
+            return
+        
+        allowed_ip = peer_info.get('allowed_ip', 'N/A')
+        status = peer_info.get('status', 'stopped')
+        status_text = "✅ Conectado" if status == 'running' else "❌ Desconectado"
+        
+        message = f"⚠️ *Confirmar Restricción de Peer*\n\n"
+        message += f"¿Estás seguro de que deseas restringir este peer?\n\n"
+        message += f"*Peer:* {peer_name}\n"
+        message += f"*Configuración:* {config_name}\n"
+        message += f"*IP:* `{allowed_ip}`\n"
+        message += f"*Estado:* {status_text}\n"
+        message += f"*Clave pública:* `{public_key[:30]}...`\n\n"
+        message += "⚠️ *Al restringir el peer, no podrá conectarse hasta que se quite la restricción.*"
+        
+        # Codificar la clave pública completa
+        from keyboards import safe_callback_data
+        safe_public_key = safe_callback_data(public_key)
+        
+        keyboard = confirmation_menu(config_name, safe_public_key, "restrict", "Restringir")
+        
+        await query.edit_message_text(
+            message,
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error en confirmación de restricción: {str(e)}")
+        await query.edit_message_text(
+            f"❌ Error al procesar la solicitud: {str(e)}",
+            reply_markup=back_button(f"restrict_peer_menu:{config_name}:0")
+        )
+
+async def handle_restrict_execute(query, config_name: str, public_key: str):
+    """Ejecuta la acción de restringir un peer"""
+    await query.edit_message_text(f"🔄 Restringiendo peer...")
+    
+    result = api_client.restrict_peer(config_name, public_key)
+    
+    if result.get("status"):
+        await query.edit_message_text(
+            f"✅ *Peer restringido correctamente*\n\n"
+            f"El peer ya no podrá conectarse a {config_name}.",
+            reply_markup=back_button(f"restrict_peer_menu:{config_name}:0"),
+            parse_mode="Markdown"
+        )
+    else:
+        error_msg = result.get('message', 'Error desconocido')
+        await query.edit_message_text(
+            f"❌ *Error al restringir peer*\n\n"
+            f"*Error:* {error_msg}",
+            reply_markup=back_button(f"restrict_peer_menu:{config_name}:0"),
+            parse_mode="Markdown"
+        )
+
+# ================= HANDLERS ESPECÍFICOS (EXISTENTES) ================= #
 async def handle_main_menu(query):
     """Muestra el menú principal"""
     await query.edit_message_text(
@@ -704,16 +1212,24 @@ async def handle_config_detail(query, config_name: str):
     total_peers = config.get('TotalPeers', 0)
     connected_peers = config.get('ConnectedPeers', 0)
     
+    # Obtener información de peers restringidos
+    peers_result = api_client.get_peers(config_name)
+    restricted_count = 0
+    if peers_result.get("status"):
+        restricted_count = peers_result.get("metadata", {}).get("restricted", 0)
+    
     message = f"⚙️ *Configuración: {config_name}*\n\n"
     message += f"📡 Puerto: `{listen_port}`\n"
     message += f"🔑 Clave pública: `{public_key[:30]}...`\n"
-    message += f"👥 Peers: *{connected_peers}/{total_peers}* conectados\n\n"
+    message += f"👥 Peers: *{connected_peers}/{total_peers}* conectados\n"
+    message += f"🚫 Restringidos: *{restricted_count}* peers\n\n"
     message += "*Opciones disponibles:*\n"
     message += "• 📥 Descargar Peers: Lista para descargar configuraciones\n"
     message += "• 📋 Detalles completos: Información detallada de todos los peers\n"
     message += "• 🗑 Eliminar Peer: Eliminar un peer existente\n"
     message += "• ➕ Agregar Peer: Crear un nuevo peer automáticamente\n"
     message += "• ⏰ Schedule Jobs: Gestionar trabajos programados\n"
+    message += "• 🚫 Restricciones: Gestionar peers restringidos\n"
     message += "• 🔄 Actualizar: Refrescar información"
     
     await query.edit_message_text(
@@ -976,8 +1492,13 @@ PersistentKeepalive = 21"""
         )
 
 async def handle_peers_detailed(query, config_name: str):
-    """Muestra información detallada de todos los peers"""
-    await query.edit_message_text(f"📋 Obteniendo detalles de peers en {config_name}...")
+    """Muestra información detallada de todos los peers - DIRECTO A PAGINADO"""
+    # Cambio: Ir directamente a la vista paginada
+    await handle_peers_detailed_paginated(query, config_name, 0)
+
+async def handle_peers_detailed_paginated(query, config_name: str, page: int = 0):
+    """Muestra información detallada de peers paginada - VERSIÓN SIN FORMATO"""
+    await query.edit_message_text(f"📋 Preparando detalles paginados...")
     
     result = api_client.get_peers(config_name)
     
@@ -997,36 +1518,61 @@ async def handle_peers_detailed(query, config_name: str):
         )
         return
     
-    message = f"📋 Detalles completos - {config_name}\n\n"
+    # Mostrar 2 peers por página para no exceder el límite
+    peers_per_page = 2
+    total_pages = (len(peers) + peers_per_page - 1) // peers_per_page
     
-    for i, peer in enumerate(peers, 1):
+    if page >= total_pages:
+        page = total_pages - 1
+    if page < 0:
+        page = 0
+    
+    start_idx = page * peers_per_page
+    end_idx = min(start_idx + peers_per_page, len(peers))
+    page_peers = peers[start_idx:end_idx]
+    
+    # Construir mensaje para esta página - SIN FORMATO MARKDOWN
+    message = f"📋 Detalles de Peers - {config_name}\n\n"
+    message += f"Página {page + 1} de {total_pages}\n"
+    message += f"Mostrando peers {start_idx + 1}-{end_idx} de {len(peers)}\n\n"
+    
+    for i, peer in enumerate(page_peers, start_idx + 1):
         message += f"Peer #{i}\n"
-        message += format_peer_for_detail(peer)
+        message += format_peer_for_detail_plain(peer)  # Usar versión sin formato
         message += "\n" + "─" * 30 + "\n\n"
     
-    message += f"📈 Resumen: {len(peers)} peers en total"
+    # Crear teclado de navegación
+    keyboard = []
     
-    # Crear teclado con botón de volver
-    keyboard = [[InlineKeyboardButton("⬅️ Volver", callback_data=f"cfg:{config_name}")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    try:
-        await query.edit_message_text(
-            message,
-            parse_mode=None,
-            reply_markup=reply_markup
+    # Botones de navegación
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(
+            InlineKeyboardButton("◀️ Anterior", callback_data=f"peers_detailed_paginated:{config_name}:{page-1}")
         )
-    except Exception as e:
-        # Si el mensaje es demasiado largo, usar send_large_message
-        if "Message is too long" in str(e):
-            await send_large_message(
-                query,
-                message,
-                parse_mode=None,
-                reply_markup=reply_markup
-            )
-        else:
-            raise
+    
+    if page < total_pages - 1:
+        nav_buttons.append(
+            InlineKeyboardButton("Siguiente ▶️", callback_data=f"peers_detailed_paginated:{config_name}:{page+1}")
+        )
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    # ELIMINAR el botón "Ver todo en un mensaje"
+    # keyboard.append([
+    #     InlineKeyboardButton("📋 Ver todo en un mensaje", callback_data=f"peers_detailed_full:{config_name}")
+    # ])
+    
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Volver al menú", callback_data=f"cfg:{config_name}")
+    ])
+    
+    await query.edit_message_text(
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=None  # SIN FORMATO
+    )
 
 async def handle_delete_peer_menu(query, config_name: str, page: int = 0):
     """Muestra el menú para seleccionar peer a eliminar"""
@@ -1096,7 +1642,7 @@ async def handle_delete_peer_menu(query, config_name: str, page: int = 0):
     )
 
 async def handle_delete_peer_confirm(query, config_name: str, peer_index: str):
-    """Muestra confirmación para eliminar un peer"""
+    """Muestra confirmación para eliminar un peer - CORREGIDO"""
     try:
         # Obtener el índice del peer
         idx = int(peer_index)
@@ -1137,9 +1683,10 @@ async def handle_delete_peer_confirm(query, config_name: str, peer_index: str):
         message += f"*Clave pública:* `{peer_key[:30]}...`\n\n"
         message += "⚠️ *Esta acción no se puede deshacer.*"
         
+        # CORREGIDO: Añadir el cuarto parámetro action_text
         await query.edit_message_text(
             message,
-            reply_markup=confirmation_menu(config_name, peer_index, "delete_peer"),
+            reply_markup=confirmation_menu(config_name, peer_index, "delete_peer", "Eliminar"),
             parse_mode="Markdown"
         )
         
@@ -1801,7 +2348,7 @@ async def handle_schedule_jobs_list(query, context: CallbackContext, config_name
     )
 
 async def handle_delete_schedule_job_confirm(query, context: CallbackContext, config_name: str, peer_index: str, job_index: str = None):
-    """Muestra confirmación para eliminar un Schedule Job individual"""
+    """Muestra confirmación para eliminar un Schedule Job individual - CORREGIDO"""
     try:
         idx = int(peer_index)
         
@@ -1900,6 +2447,7 @@ async def handle_delete_schedule_job_confirm(query, context: CallbackContext, co
         message += f"*{field_display}*\n\n"
         message += "⚠️ *Esta acción no se puede deshacer.*"
         
+        # CORREGIDO: Usar el formato simplificado en lugar de confirmation_menu
         keyboard = [
             [
                 InlineKeyboardButton("✅ Sí, eliminar", callback_data=f"delete_schedule_job_execute:{config_name}:{idx}:{job_idx}"),
@@ -2080,20 +2628,78 @@ async def handle_protocols(query):
     )
 
 async def handle_stats(query):
-    """Muestra estadísticas detalladas"""
-    await query.edit_message_text("📊 Obteniendo estadísticas...")
+    """Muestra estadísticas específicas de WireGuard sin datos de transferencia"""
+    await query.edit_message_text("📊 Obteniendo estadísticas de WireGuard...")
     
-    result = api_client.get_system_status()
+    # Obtener todas las configuraciones para calcular estadísticas
+    configs_result = api_client.get_configurations()
     
-    if not result.get("status"):
+    if not configs_result.get("status"):
         await query.edit_message_text(
-            f"❌ Error: {result.get('message', 'Error desconocido')}",
+            f"❌ Error: {configs_result.get('message', 'Error desconocido')}",
             reply_markup=refresh_button("stats")
         )
         return
     
-    status_data = result.get("data", {})
-    formatted_text = format_system_status(status_data)
+    configs = configs_result.get("data", [])
+    
+    if not configs:
+        await query.edit_message_text(
+            "⚠️ No hay configuraciones WireGuard disponibles",
+            reply_markup=refresh_button("stats")
+        )
+        return
+    
+    lines = []
+    lines.append("📊 **Estadísticas de WireGuard**\n")
+    
+    total_peers = 0
+    total_connected = 0
+    
+    # Calcular estadísticas de todas las configuraciones
+    for config in configs:
+        config_name = config.get('Name', 'Desconocido')
+        config_peers = config.get('TotalPeers', 0)
+        config_connected = config.get('ConnectedPeers', 0)
+        
+        total_peers += config_peers
+        total_connected += config_connected
+    
+    # Estadísticas generales
+    lines.append(f"📡 **Configuraciones totales:** {len(configs)}")
+    lines.append(f"👥 **Total de peers:** {total_peers}")
+    lines.append(f"✅ **Peers conectados:** {total_connected}")
+    
+    if total_peers > 0:
+        connection_rate = (total_connected / total_peers) * 100
+        lines.append(f"📶 **Tasa de conexión:** {connection_rate:.1f}%\n")
+    else:
+        lines.append("\n")
+    
+    # Configuraciones individuales (mostrar solo las principales)
+    lines.append("🔧 **Configuraciones activas:**")
+    
+    # Ordenar configuraciones por número de peers conectados (más activas primero)
+    sorted_configs = sorted(configs, key=lambda x: x.get('ConnectedPeers', 0), reverse=True)
+    
+    for config in sorted_configs[:5]:  # Mostrar solo las primeras 5 configuraciones
+        name = config.get('Name', 'Desconocido')
+        peers = config.get('TotalPeers', 0)
+        connected = config.get('ConnectedPeers', 0)
+        listen_port = config.get('ListenPort', 'N/A')
+        
+        status_emoji = "✅" if connected > 0 else "⚠️"
+        lines.append(f"   {status_emoji} **{name}** (puerto {listen_port})")
+        lines.append(f"      👥 {connected}/{peers} peers conectados")
+    
+    if len(configs) > 5:
+        lines.append(f"   ... y {len(configs) - 5} configuraciones más")
+    
+    # Agregar timestamp de la última actualización
+    from datetime import datetime
+    lines.append(f"\n🕐 Última actualización: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    formatted_text = "\n".join(lines)
     
     await query.edit_message_text(
         formatted_text,
