@@ -11,3 +11,7 @@ API_TIMEOUT=10
 LOG_FILE=wg_bot.log
 LOG_LEVEL=INFO
 MAX_PEERS_DISPLAY=10
+
+
+config.py   line 26  add id telegram owner
+    yourID: "Admin Principal",
