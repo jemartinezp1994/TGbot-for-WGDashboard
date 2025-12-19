@@ -13,8 +13,10 @@ LOG_LEVEL=INFO
 MAX_PEERS_DISPLAY=10
 
 ```
-```
 
-in config.py   line 26  add id telegram owner
+en config.py
+
+line 26  add id telegram owner
+```
     yourID: "Admin Principal",
 ```
