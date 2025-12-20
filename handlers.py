@@ -16,21 +16,31 @@ import urllib.parse
 from typing import Dict, List, Any, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import ContextTypes, CallbackContext
+from datetime import datetime 
 import io
+from datetime import datetime, timedelta
+from config import ROLE_OPERATOR, ALLOWED_USERS
+import hashlib
+from telegram.error import BadRequest
+from config import ROLE_ADMIN, ROLE_OPERATOR, OPERATOR_DATA_LIMIT_GB, OPERATOR_TIME_LIMIT_HOURS
+from operators import operators_db
+from utils import is_allowed, is_admin, is_operator, can_operator_create_peer, log_command_with_role
 
 from config import ALLOWED_USERS
 from wg_api import api_client
 from keyboards import (
     main_menu, config_menu, paginated_configs_menu, restrictions_menu,
     paginated_restricted_peers_menu, paginated_unrestricted_peers_menu,
-    confirmation_menu, back_button, refresh_button,
+    confirmation_menu, back_button, refresh_button, operator_main_menu,
     InlineKeyboardMarkup, decode_callback_data
 )
 from utils import (
     is_allowed, get_user_name, format_peer_info,
     format_system_status, format_config_summary,
     send_large_message, log_command, log_callback, log_error,
-    format_bytes_human, format_time_ago
+    format_bytes_human, format_time_ago,
+    log_callback_with_role, log_command_with_role,
+    is_admin, is_operator, can_operator_create_peer
 )
 
 logger = logging.getLogger(__name__)
@@ -300,9 +310,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         return
     
-    log_command(update, "start")
+    user_id = update.effective_user.id
+    log_command_with_role(update, "start")
     
-    welcome_text = f"""🤖 *Bienvenido al Bot de WGDashboard, {get_user_name(update)}!*
+    welcome_text = ""
+    
+    if is_admin(user_id):
+        welcome_text = f"""🤖 *Bienvenido Admin {get_user_name(update)}!*
 
 Con este bot puedes gestionar tus configuraciones WireGuard de manera remota.
 
@@ -314,12 +328,35 @@ Con este bot puedes gestionar tus configuraciones WireGuard de manera remota.
 • 📊 Estadísticas detalladas
 • ⏰ Schedule Jobs (trabajos programados)
 • 🚫 Gestionar restricciones de peers
+• 👷 Supervisar operadores
 
 Selecciona una opción del menú o usa /help para ver todos los comandos."""
+        keyboard = main_menu(is_admin(user_id), is_operator(user_id))
     
+    elif is_operator(user_id):
+        welcome_text = f"""👷 *Bienvenido Operador {get_user_name(update)}!*
+
+Puedes crear peers temporales para pruebas o acceso limitado.
+
+*Instrucciones:*
+1. Toca el botón '➕ Crear Peer' 
+2. Envía un nombre para el peer
+3. El bot creará automáticamente:
+   • Claves WireGuard
+   • IP única
+   • Límite de 1 GB de datos
+   • Expiración en 24 horas
+4. Descarga la configuración
+
+*Límites de operador:*
+• ⏰ 1 peer cada 24 horas
+• 📊 1 GB de datos por peer
+• ⏳ 24 horas de duración"""
+        keyboard = operator_main_menu()
+
     await update.message.reply_text(
         welcome_text,
-        reply_markup=main_menu(),
+        reply_markup=keyboard,
         parse_mode="Markdown"
     )
 
@@ -328,9 +365,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         return
     
-    log_command(update, "help")
+    user_id = update.effective_user.id
+    log_command_with_role(update, "help")
     
-    help_text = """📚 *Comandos disponibles:*
+    if is_admin(user_id):
+        help_text = """📚 *Ayuda para Administradores*
 
 *Comandos principales:*
 /start - Iniciar el bot y mostrar menú
@@ -338,35 +377,43 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /stats - Estadísticas del sistema
 /configs - Listar configuraciones
 
-*Funciones desde el menú:*
-• 🔌 Test API - Verificar conexión con WGDashboard
-• 📡 Configuraciones - Listar y gestionar configs
-• 🖥 Estado del Sistema - Monitoreo en tiempo real
-• ⚡ Protocolos - Ver protocolos habilitados
-• 📊 Estadísticas - Estadísticas detalladas
-• 🚫 Restricciones - Gestionar peers restringidos
+*Funciones completas:*
+• Gestionar todas las configuraciones WireGuard
+• Ver, crear, eliminar peers
+• Monitorear sistema
+• Gestionar schedule jobs
+• Controlar restricciones
+• Supervisar operadores"""
+        keyboard = main_menu(is_admin(user_id), is_operator(user_id))
+    
+    elif is_operator(user_id):
+        help_text = """📚 *Ayuda para Operadores*
 
-*Acciones por configuración:*
-• 👤 Listar Peers - Ver lista de peers
-• 📋 Detalles Peers - Información detallada
-• 🗑 Eliminar Peer - Eliminar un peer
-• ➕ Agregar Peer - Agregar nuevo peer automáticamente
-• ⏰ Schedule Jobs - Gestionar trabajos programados
-• 🚫 Restricciones - Ver y gestionar peers restringidos
-• 🔄 Actualizar - Refrescar información
+*Tu función:*
+1. *Crear Peer Temporal*:
+   - Usa el botón '➕ Crear Peer'
+   - Proporciona un nombre
+   - El bot genera automáticamente:
+     • Claves WireGuard
+     • IP única
+     • Límite de 1 GB de datos
+     • Expiración en 24 horas
+   - Descarga el archivo .conf
 
-*Nuevo: Gestión de Restricciones*
-• 👥 Restringidos - Ver peers restringidos y quitar restricción
-• 🔒 Restringir Peer - Restringir acceso a un peer
+*Límites:*
+• ⏰ Solo 1 peer cada 24 horas
+• 📊 1 GB de datos por peer
+• ⏳ 24 horas de duración
 
-*Notas:*
-- Solo usuarios autorizados pueden usar este bot
-- Los datos se actualizan automáticamente
-- Usa los botones para navegar fácilmente"""
+*Comandos:*
+/start - Menú principal
+/help - Esta ayuda"""
+        
+        keyboard = operator_main_menu()
     
     await update.message.reply_text(
         help_text,
-        reply_markup=main_menu(),
+        reply_markup=keyboard,
         parse_mode="Markdown"
     )
 
@@ -419,15 +466,55 @@ async def callback_handler(update: Update, context: CallbackContext):
     await query.answer()
     
     callback_data = query.data
-    log_callback(update, callback_data)
+    user_id = query.from_user.id
+    
+    log_callback_with_role(update, callback_data)
     
     logger.debug(f"CALLBACK DEBUG: {callback_data}")
     
+    # ================= VERIFICACIÓN DE ROLES ================= #
+    # Lista de acciones permitidas solo para admins
+    admin_only_actions = [
+        "handshake", "configs", "configs_summary", "page_configs:",
+        "system_status", "protocols", "stats",
+        "cfg:", "peers:", "peers_detailed:", "peers_detailed_paginated:",
+        "delete_peer:", "page_delete_peer:", "delete_peer_confirm:", "delete_peer_execute:",
+        "schedule_jobs_menu:", "schedule_job_peer:", "add_schedule_job_data:", "add_schedule_job_date:",
+        "delete_schedule_job_confirm:", "delete_schedule_job_execute:",
+        "restrictions:", "restricted_peers:", "restrict_peer_menu:",
+        "unrestrict:", "restrict:", "page_res:", "page_unres:"
+    ]
+    
+    # Verificar si es operador intentando acceder a funciones de admin
+    if is_operator(user_id):
+        for admin_action in admin_only_actions:
+            if callback_data.startswith(admin_action):
+                await query.edit_message_text(
+                    "❌ *Acceso restringido*\n\n"
+                    "Esta función solo está disponible para administradores.\n\n"
+                    "Como operador solo puedes crear peers temporales.",
+                    reply_markup=operator_main_menu(),
+                    parse_mode="Markdown"
+                )
+                return
+    
     try:
-        # --- MANEJO DE ACCIONES PRINCIPALES ---
+        # ================= MANEJO DE ACCIONES DE OPERADORES ================= #
         if callback_data == "main_menu":
-            await handle_main_menu(query)
+            if is_operator(user_id):
+                await handle_operator_main_menu(query)
+            else:
+                await handle_main_menu(query)
         
+        elif callback_data == "operator_main_menu":
+            await handle_operator_main_menu(query)
+        
+        elif callback_data == "operator_create_peer_menu":
+            await handle_operator_create_peer(query, context)
+        
+        
+        
+        # ================= MANEJO DE ACCIONES PRINCIPALES ================= #
         elif callback_data == "handshake":
             await handle_handshake(query)
         
@@ -448,8 +535,13 @@ async def callback_handler(update: Update, context: CallbackContext):
         
         elif callback_data == "help":
             await handle_help(query)
-        
-        # --- MANEJO DE RESTRICCIONES (VERSIÓN SIMPLIFICADA) ---
+        elif callback_data == "operators_list":
+            await handle_operators_list(query, context)
+
+        elif callback_data == "operators_detailed":
+            await handle_operators_detailed(query, context)        
+
+        # ================= MANEJO DE RESTRICCIONES ================= #
         elif callback_data.startswith("restrictions:"):
             parts = callback_data.split(":")
             if len(parts) > 1:
@@ -469,7 +561,6 @@ async def callback_handler(update: Update, context: CallbackContext):
                 page = int(parts[2])
                 await handle_unrestricted_peers_list(query, context, config_name, page)
         
-        # --- NUEVAS RUTAS SIMPLIFICADAS ---
         elif callback_data.startswith("unrestrict:"):
             parts = callback_data.split(":")
             if len(parts) >= 3:
@@ -484,7 +575,7 @@ async def callback_handler(update: Update, context: CallbackContext):
                 peer_index = int(parts[2])
                 await handle_restrict_simple(query, context, config_name, peer_index)
         
-        # --- PAGINACIÓN SIMPLIFICADA ---
+        # ================= PAGINACIÓN DE RESTRICCIONES ================= #
         elif callback_data.startswith("page_res:"):
             parts = callback_data.split(":")
             if len(parts) >= 3:
@@ -499,7 +590,7 @@ async def callback_handler(update: Update, context: CallbackContext):
                 page = int(parts[2])
                 await handle_unrestricted_peers_list(query, context, config_name, page)
         
-        # --- MANEJO DE PAGINACIÓN ORIGINAL ---
+        # ================= MANEJO DE PAGINACIÓN ================= #
         elif callback_data.startswith("page_configs:"):
             parts = callback_data.split(":")
             page = int(parts[1]) if len(parts) > 1 else 0
@@ -512,13 +603,6 @@ async def callback_handler(update: Update, context: CallbackContext):
                 page = int(parts[2])
                 await handle_delete_peer_menu(query, config_name, page)
         
-        elif callback_data.startswith("page_peers:"):
-            parts = callback_data.split(":")
-            if len(parts) >= 3:
-                config_name = parts[1]
-                page = int(parts[2])
-                await handle_peers_list(query, context, config_name, page)
-        
         elif callback_data.startswith("page_schedule_jobs:"):
             parts = callback_data.split(":")
             if len(parts) >= 4:
@@ -527,23 +611,11 @@ async def callback_handler(update: Update, context: CallbackContext):
                 page = int(parts[3])
                 await handle_schedule_jobs_list(query, context, config_name, peer_index, page)
         
-        # --- MANEJO DE DESCARGA DIRECTA DESDE LISTA ---
-        elif callback_data.startswith("download_peer_direct:"):
-            parts = callback_data.split(":")
-            if len(parts) >= 2:
-                peer_hash = parts[1]
-                await handle_download_peer_direct(query, context, peer_hash)
-
-        # --- MANEJO DE CONFIGURACIONES ESPECÍFICAS ---
+        # ================= MANEJO DE CONFIGURACIONES ESPECÍFICAS ================= #
         elif callback_data.startswith("cfg:"):
             parts = callback_data.split(":")
             if len(parts) > 1:
                 await handle_config_detail(query, parts[1])
-        
-        elif callback_data.startswith("peers:"):
-            parts = callback_data.split(":")
-            if len(parts) > 1:
-                await handle_peers_list(query, context, parts[1], 0)
         
         elif callback_data.startswith("peers_detailed:"):
             parts = callback_data.split(":")
@@ -557,7 +629,6 @@ async def callback_handler(update: Update, context: CallbackContext):
                 config_name = parts[1]
                 await handle_peers_detailed_full(query, config_name)
         
-        # --- MANEJO DE DETALLES PAGINADOS (AGREGADO PARA CORREGIR EL ERROR) ---
         elif callback_data.startswith("peers_detailed_paginated:"):
             parts = callback_data.split(":")
             if len(parts) >= 3:
@@ -565,7 +636,7 @@ async def callback_handler(update: Update, context: CallbackContext):
                 page = int(parts[2])
                 await handle_peers_detailed_paginated(query, config_name, page)
         
-        # --- MANEJO DE ELIMINACIÓN DE PEERS ---
+        # ================= MANEJO DE ELIMINACIÓN DE PEERS ================= #
         elif callback_data.startswith("delete_peer:"):
             parts = callback_data.split(":")
             if len(parts) > 1:
@@ -586,28 +657,20 @@ async def callback_handler(update: Update, context: CallbackContext):
                 peer_index = decode_callback_data(peer_index_encoded)
                 await handle_delete_peer_final(query, config_name, peer_index)
         
-        # --- MANEJO DE AGREGAR PEER (AUTOMÁTICO) ---
+        # ================= MANEJO DE AGREGAR PEER (AUTOMÁTICO) ================= #
         elif callback_data.startswith("add_peer:"):
             parts = callback_data.split(":")
             if len(parts) > 1:
                 await handle_add_peer(query, context, parts[1])
         
-        # --- MANEJO DE DESCARGA DE CONFIGURACIÓN ---
+        # ================= MANEJO DE DESCARGA DE CONFIGURACIÓN ================= #
         elif callback_data.startswith("download_config:"):
             parts = callback_data.split(":")
             if len(parts) >= 2:
                 peer_hash = parts[1]
                 await handle_download_peer_config(query, context, peer_hash)
         
-        elif callback_data.startswith("peer_download:"):
-            parts = callback_data.split(":")
-            if len(parts) >= 4:
-                config_name = parts[1]
-                peer_index = parts[2]
-                peer_hash = parts[3]
-                await handle_peer_download_list(query, context, config_name, peer_index, peer_hash)
-        
-        # --- MANEJO DE SCHEDULE JOBS ---
+        # ================= MANEJO DE SCHEDULE JOBS ================= #
         elif callback_data.startswith("schedule_jobs_menu:"):
             parts = callback_data.split(":")
             if len(parts) > 1:
@@ -634,7 +697,7 @@ async def callback_handler(update: Update, context: CallbackContext):
                 peer_index = parts[2]
                 await handle_add_schedule_job_date(query, context, config_name, peer_index)
         
-        # --- MANEJO DE ELIMINACIÓN DE SCHEDULE JOBS ---
+        # ================= MANEJO DE ELIMINACIÓN DE SCHEDULE JOBS ================= #
         elif callback_data.startswith("delete_schedule_job_final:"):
             parts = callback_data.split(":")
             if len(parts) >= 4:
@@ -666,20 +729,89 @@ async def callback_handler(update: Update, context: CallbackContext):
                 job_index = parts[3]
                 await handle_delete_schedule_job_execute(query, context, config_name, peer_index, job_index)
         
-        # --- SI NO RECONOCE EL CALLBACK ---
+        # ================= ACCIÓN NO RECONOCIDA ================= #
         else:
             logger.warning(f"Acción no reconocida: {callback_data}")
-            await query.edit_message_text(
-                f"❌ Acción no reconocida: {callback_data}",
-                reply_markup=back_button("main_menu")
+            if is_operator(user_id):
+                await query.edit_message_text(
+                    f"❌ Acción no reconocida: {callback_data}",
+                    reply_markup=operator_main_menu()
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ Acción no reconocida: {callback_data}",
+                    reply_markup=back_button("main_menu")
+                )
+                
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            # Ignorar este error específico - el mensaje ya está actualizado
+            await query.answer()
+            logger.debug(f"Message not modified para callback: {callback_data}")
+        else:
+            log_error(update, e, f"callback_handler: {callback_data}")
+            await query.answer(
+                f"❌ Error: {str(e)[:50]}...",
+                show_alert=True
             )
-            
     except Exception as e:
         log_error(update, e, f"callback_handler: {callback_data}")
-        await query.edit_message_text(
-            f"❌ Ocurrió un error al procesar la acción\n\nError: {str(e)}\n\nCallback: {callback_data}",
-            reply_markup=back_button("main_menu")
-        )
+        try:
+            if is_operator(user_id):
+                await query.edit_message_text(
+                    f"❌ Ocurrió un error al procesar la acción\n\nError: {str(e)[:100]}",
+                    reply_markup=operator_main_menu()
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ Ocurrió un error al procesar la acción\n\nError: {str(e)[:100]}",
+                    reply_markup=back_button("main_menu")
+                )
+        except BadRequest as edit_error:
+            # Si también falla al editar, mostrar alerta
+            if "Message is not modified" not in str(edit_error):
+                await query.answer(
+                    f"❌ Error: {str(e)[:50]}...",
+                    show_alert=True
+                )
+
+async def handle_operator_main_menu(query):
+    """Muestra el menú principal para operadores"""
+    user = query.from_user
+    # Construir el nombre de usuario manualmente
+    username = f"{user.first_name or ''}"
+    if user.last_name:
+        username += f" {user.last_name}"
+    if user.username:
+        username += f" (@{user.username})"
+    
+    if not username.strip():
+        username = "Operador"
+    
+    welcome_text = f"""👷 *Menú de Operador {username}!*
+
+Puedes crear peers temporales para pruebas o acceso limitado.
+
+*Instrucciones:*
+1. Toca el botón '➕ Crear Peer' 
+2. Envía un nombre para el peer
+3. El bot creará automáticamente:
+   • Claves WireGuard
+   • IP única
+   • Límite de 1 GB de datos
+   • Expiración en 24 horas
+4. Descarga la configuración
+
+*Límites de operador:*
+• ⏰ 1 peer cada 24 horas
+• 📊 1 GB de datos por peer
+• ⏳ 24 horas de duración"""
+    
+    await query.edit_message_text(
+        welcome_text,
+        reply_markup=operator_main_menu(),
+        parse_mode="Markdown"
+    )
 
 # ================= HANDLERS DE RESTRICCIONES ================= #
 async def handle_restrictions_menu(query, config_name: str):
@@ -1060,7 +1192,7 @@ async def handle_restrict_execute(query, config_name: str, public_key: str):
 
 # ================= HANDLERS ESPECÍFICOS (EXISTENTES) ================= #
 async def handle_main_menu(query):
-    """Muestra el menú principal"""
+    """Muestra el menú principal para administradores"""
     await query.edit_message_text(
         "🤖 *Menú Principal*\nSelecciona una opción:",
         reply_markup=main_menu(),
@@ -1224,7 +1356,6 @@ async def handle_config_detail(query, config_name: str):
     message += f"👥 Peers: *{connected_peers}/{total_peers}* conectados\n"
     message += f"🚫 Restringidos: *{restricted_count}* peers\n\n"
     message += "*Opciones disponibles:*\n"
-    message += "• 📥 Descargar Peers: Lista para descargar configuraciones\n"
     message += "• 📋 Detalles completos: Información detallada de todos los peers\n"
     message += "• 🗑 Eliminar Peer: Eliminar un peer existente\n"
     message += "• ➕ Agregar Peer: Crear un nuevo peer automáticamente\n"
@@ -1238,203 +1369,60 @@ async def handle_config_detail(query, config_name: str):
         parse_mode="Markdown"
     )
 
-async def handle_peers_list(query, context: CallbackContext, config_name: str, page: int = 0):
-    """Muestra la lista de peers para descarga directa"""
-    await query.edit_message_text(f"👤 Obteniendo peers de {config_name}...")
-    
-    result = api_client.get_peers(config_name)
-    
-    if not result.get("status"):
-        error_msg = result.get("message", "Error desconocido")
-        
-        await query.edit_message_text(
-            f"❌ Error: {error_msg}",
-            reply_markup=back_button(f"cfg:{config_name}")
-        )
-        return
-    
-    peers = result.get("data", [])
-    metadata = result.get("metadata", {})
-    
-    if not peers:
-        await query.edit_message_text(
-            f"⚠️ No hay peers en {config_name}",
-            reply_markup=back_button(f"cfg:{config_name}")
-        )
-        return
-    
-    # Crear teclado con paginación
-    keyboard = []
-    start_idx = page * 8  # 8 items por página
-    end_idx = start_idx + 8
-    page_peers = peers[start_idx:end_idx]
-    
-    for i, peer in enumerate(page_peers, start_idx):
-        peer_name = peer.get('name', 'Sin nombre')
-        public_key = peer.get('id', '')
-        allowed_ip = peer.get('allowed_ip', 'N/A')
-        latest_handshake = peer.get('latest_handshake_seconds', 0)
-        status = peer.get('status', 'stopped')
-        
-        # Determinar estado para el emoji
-        if status == 'running' and latest_handshake > 0:
-            status_emoji = "✅"
-        else:
-            status_emoji = "❌"
-        
-        # Crear texto del botón con estado e información básica
-        button_text = f"{status_emoji} {peer_name} - IP: {allowed_ip}"
-        
-        # Crear un hash corto para este peer
-        peer_hash = create_peer_hash(config_name, public_key, peer_name)
-        
-        # Guardar información del peer en el contexto si no existe
-        context_key = f'peer_{peer_hash}'
-        if not context.user_data.get(context_key):
-            context.user_data[context_key] = {
-                'config_name': config_name,
-                'peer_name': peer_name,
-                'public_key': public_key,
-                'allowed_ip': allowed_ip
-            }
-        
-        # Un solo botón por peer que descarga directamente
-        keyboard.append([
-            InlineKeyboardButton(
-                button_text,
-                callback_data=f"download_peer_direct:{peer_hash}"
-            )
-        ])
-    
-    # Botones de navegación
-    nav_buttons = []
-    
-    if page > 0:
-        nav_buttons.append(
-            InlineKeyboardButton("◀️ Anterior", callback_data=f"page_peers:{config_name}:{page-1}")
-        )
-    
-    if end_idx < len(peers):
-        nav_buttons.append(
-            InlineKeyboardButton("Siguiente ▶️", callback_data=f"page_peers:{config_name}:{page+1}")
-        )
-    
-    if nav_buttons:
-        keyboard.append(nav_buttons)
-    
-    # Botones de acción global (reducidos)
-    keyboard.append([
-        InlineKeyboardButton("📋 Ver detalles", callback_data=f"peers_detailed:{config_name}")
-    ])
-    
-    keyboard.append([
-        InlineKeyboardButton("⬅️ Volver", callback_data=f"cfg:{config_name}")
-    ])
-    
-    total_peers = len(peers)
-    total_pages = (total_peers - 1) // 8 + 1
-    
-    message = f"👥 *Peers en {config_name}*\n\n"
-    message += f"📊 Total peers: {metadata.get('total', 0)}\n"
-    message += f"✅ Conectados: {metadata.get('connected', 0)}\n"
-    message += f"📄 Página {page + 1} de {total_pages}\n\n"
-    message += "*Presiona sobre un peer para descargar su configuración.*\n"
-    message += "✅ = Conectado | ❌ = Desconectado"
-    
-    await query.edit_message_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
-
-async def handle_download_peer_direct(query, context: CallbackContext, peer_hash: str):
-    """Descarga directamente la configuración de un peer desde la lista"""
-    await query.edit_message_text("📥 Descargando configuración...")
-    
+async def handle_operator_download_template(query, context: CallbackContext, config_name: str, peer_name: str, public_key: str, endpoint: str, user_id: int):
+    """Descarga plantilla para operadores (sin claves privadas)"""
     try:
-        # Obtener datos del peer desde el contexto
-        peer_data = context.user_data.get(f'peer_{peer_hash}')
-        if not peer_data:
+        # Obtener información del servidor por defecto
+        from config import WG_API_BASE_URL
+        import urllib.parse
+        
+        parsed_url = urllib.parse.urlparse(WG_API_BASE_URL)
+        server_host = parsed_url.hostname
+        
+        # Obtener información de la configuración
+        config_result = api_client.get_configuration_detail(config_name)
+        if not config_result.get("status"):
             await query.edit_message_text(
-                f"❌ No se pudo encontrar la información del peer.\n"
-                f"La información puede haber expirado. Por favor, vuelve a la lista.",
-                reply_markup=back_button("main_menu")
+                f"❌ No se pudo obtener información de la configuración",
+                reply_markup=operator_main_menu()
             )
             return
         
-        config_name = peer_data['config_name']
-        peer_name = peer_data['peer_name']
-        public_key = peer_data.get('public_key', '')
-        allowed_ip = peer_data.get('allowed_ip', '10.21.0.2/32')
+        config_data = config_result.get("data", {})
+        listen_port = config_data.get('ListenPort', '51820')
+        server_public_key = config_data.get('PublicKey', '')
         
-        # Primero intentar obtener la configuración del servidor
-        download_result = api_client.download_peer_config(config_name, public_key)
-        
-        if download_result.get("status"):
-            # El servidor proporciona la configuración completa
-            config_content = download_result.get("data", "")
-            filename = f"{peer_name}_{config_name}.conf"
-            
-            file_like = io.BytesIO(config_content.encode('utf-8'))
-            file_like.name = filename
-            
-            # Enviar el archivo
-            await query.message.reply_document(
-                document=InputFile(file_like, filename=filename),
-                caption=f"📁 Configuración de {peer_name} para {config_name}"
-            )
-            
-            # Actualizar mensaje original
+        if not server_public_key:
             await query.edit_message_text(
-                f"✅ *Configuración descargada*\n\n"
-                f"El archivo `{filename}` ha sido enviado.\n\n"
-                f"*Peer:* {peer_name}\n"
-                f"*Configuración:* {config_name}",
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("⬅️ Volver a Lista", callback_data=f"peers:{config_name}"),
-                        InlineKeyboardButton("🔄 Descargar de nuevo", callback_data=f"download_peer_direct:{peer_hash}")
-                    ]
-                ]),
-                parse_mode="Markdown"
+                f"❌ No se pudo obtener la clave pública del servidor",
+                reply_markup=operator_main_menu()
             )
-            
+            return
+        
+        # Obtener información del peer (IP y DNS)
+        allowed_ip = "10.21.0.2/32"
+        dns = "1.1.1.1"
+        
+        peers_result = api_client.get_peers(config_name)
+        if peers_result.get("status"):
+            peers = peers_result.get("data", [])
+            for peer in peers:
+                if peer.get('id') == public_key:
+                    allowed_ip = peer.get('allowed_ip', allowed_ip)
+                    dns = peer.get('DNS', dns)
+                    break
+        
+        # Usar endpoint personalizado si se proporciona, de lo contrario usar el del servidor
+        if endpoint:
+            # endpoint ya viene en formato host:puerto
+            endpoint_host, endpoint_port = endpoint.split(':')
         else:
-            # El servidor no proporciona la configuración, generar plantilla
-            await query.edit_message_text(f"🔄 Generando plantilla para {peer_name}...")
-            
-            # Obtener información del servidor
-            from config import WG_API_BASE_URL
-            
-            parsed_url = urllib.parse.urlparse(WG_API_BASE_URL)
-            server_host = parsed_url.hostname
-            
-            # Obtener información de la configuración
-            config_result = api_client.get_configuration_detail(config_name)
-            if not config_result.get("status"):
-                await query.edit_message_text(
-                    f"❌ No se pudo obtener información de la configuración",
-                    reply_markup=back_button(f"peers:{config_name}")
-                )
-                return
-            
-            config_data = config_result.get("data", {})
-            listen_port = config_data.get('ListenPort', '51820')
-            server_public_key = config_data.get('PublicKey', '')
-            
-            # Obtener DNS del peer si existe, o usar el predeterminado
-            peers_result = api_client.get_peers(config_name)
-            dns = "1.1.1.1"
-            if peers_result.get("status"):
-                peers = peers_result.get("data", [])
-                for peer in peers:
-                    if peer.get('id') == public_key:
-                        dns = peer.get('DNS', '1.1.1.1')
-                        break
-            
-            # Crear plantilla de configuración
-            template = f"""# Configuración WireGuard para {peer_name}
-# Completa la información faltante
+            endpoint_host = server_host
+            endpoint_port = listen_port
+        
+        # Crear plantilla de configuración
+        template = f"""# Configuración WireGuard para {peer_name}
+# Este peer fue creado por un operador y tiene límites automáticos
 
 [Interface]
 PrivateKey = [TU_CLAVE_PRIVADA_AQUÍ]
@@ -1444,50 +1432,52 @@ DNS = {dns}
 [Peer]
 PublicKey = {server_public_key}
 AllowedIPs = 0.0.0.0/0
-Endpoint = {server_host}:{listen_port}
-PersistentKeepalive = 21"""
-            
-            filename = f"{peer_name}_{config_name}_plantilla.conf"
-            
-            file_like = io.BytesIO(template.encode('utf-8'))
-            file_like.name = filename
-            
-            # Enviar el archivo
-            await query.message.reply_document(
-                document=InputFile(file_like, filename=filename),
-                caption=f"📄 Plantilla de configuración para {peer_name}"
-            )
-            
-            # Actualizar mensaje original
-            await query.edit_message_text(
-                f"📄 *Plantilla generada para {peer_name}*\n\n"
-                f"Se ha enviado una plantilla de configuración.\n\n"
-                f"*Información incluida:*\n"
-                f"• IP: `{allowed_ip}`\n"
-                f"• DNS: `{dns}`\n"
-                f"• Servidor: `{server_host}:{listen_port}`\n"
-                f"• Clave pública del servidor: `{server_public_key[:30]}...`\n\n"
-                f"*Para completar:*\n"
-                f"1. Reemplaza `[TU_CLAVE_PRIVADA_AQUÍ]` con la clave privada\n"
-                f"2. Guarda el archivo como `{peer_name}.conf`\n"
-                f"3. Importa en tu cliente WireGuard\n\n"
-                f"*Nota:* La clave privada solo está disponible al crear el peer desde el bot.",
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("⬅️ Volver a Lista", callback_data=f"peers:{config_name}"),
-                        InlineKeyboardButton("➕ Crear nuevo Peer", callback_data=f"add_peer:{config_name}")
-                    ]
-                ]),
-                parse_mode="Markdown"
-            )
+Endpoint = {endpoint_host}:{endpoint_port}
+PersistentKeepalive = 21
+
+# ⚠️ LÍMITES AUTOMÁTICOS:
+# • 1 GB de transferencia de datos
+# • Expira en 24 horas desde la creación
+# • Contacta al administrador para extensión"""
+        
+        filename = f"{peer_name}_{config_name}_plantilla.conf"
+        
+        file_like = io.BytesIO(template.encode('utf-8'))
+        file_like.name = filename
+        
+        # Enviar el archivo
+        await query.message.reply_document(
+            document=InputFile(file_like, filename=filename),
+            caption=f"📄 Plantilla de configuración para {peer_name}"
+        )
+        
+        # Actualizar mensaje original CON BOTÓN DE VOLVER
+        await query.edit_message_text(
+            f"📄 *Plantilla generada para {peer_name}*\n\n"
+            f"Se ha enviado una plantilla de configuración.\n\n"
+            f"*Información incluida:*\n"
+            f"• IP: `{allowed_ip}`\n"
+            f"• DNS: `{dns}`\n"
+            f"• Endpoint: `{endpoint_host}:{endpoint_port}`\n"
+            f"• Clave pública del servidor: `{server_public_key[:30]}...`\n\n"
+            f"*Para completar:*\n"
+            f"1. Contacta al administrador para obtener la clave privada\n"
+            f"2. Reemplaza `[TU_CLAVE_PRIVADA_AQUÍ]`\n"
+            f"3. Guarda el archivo como `{peer_name}.conf`\n"
+            f"4. Importa en tu cliente WireGuard\n\n"
+            f"*Nota:* Este peer tiene límites automáticos de 1GB/24h.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Volver al Menú", callback_data="operator_main_menu")]
+            ]),
+            parse_mode="Markdown"
+        )
     
     except Exception as e:
-        logger.error(f"Error al descargar configuración directa: {str(e)}")
+        logger.error(f"Error al descargar plantilla para operador: {str(e)}")
         await query.edit_message_text(
-            f"❌ *Error al descargar configuración*\n\n"
-            f"*Error:* {str(e)}\n\n"
-            f"Intenta obtener la configuración desde el panel web de WGDashboard.",
-            reply_markup=back_button(f"cfg:{config_name}"),
+            f"❌ *Error al generar plantilla*\n\n"
+            f"*Error:* {str(e)}",
+            reply_markup=operator_main_menu(),
             parse_mode="Markdown"
         )
 
@@ -1755,6 +1745,40 @@ async def handle_delete_peer_final(query, config_name: str, peer_index: str):
 
 async def handle_add_peer(query, context: CallbackContext, config_name: str):
     """Pide el nombre para generar un peer automáticamente"""
+    user_id = query.from_user.id
+    
+    # Si es operador, verificar límites
+    if is_operator(user_id):
+        can_create, error_msg, next_allowed = can_operator_create_peer(user_id)
+        
+        if not can_create:
+            if next_allowed:
+                remaining = next_allowed - datetime.now()
+                hours = int(remaining.total_seconds() // 3600)
+                minutes = int((remaining.total_seconds() % 3600) // 60)
+                
+                if hours > 0:
+                    time_msg = f"{hours} horas y {minutes} minutos"
+                else:
+                    time_msg = f"{minutes} minutos"
+                
+                await query.edit_message_text(
+                    f"⏰ *Límite alcanzado*\n\n"
+                    f"{error_msg}\n\n"
+                    f"⏳ Tiempo restante: *{time_msg}*\n\n"
+                    f"Puedes crear otro peer después de este tiempo.",
+                    reply_markup=operator_main_menu(),
+                    parse_mode="Markdown"
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ *No puedes crear más peers*\n\n"
+                    f"{error_msg}",
+                    reply_markup=operator_main_menu(),
+                    parse_mode="Markdown"
+                )
+            return
+    
     # Limpiar estado previo
     for key in ['waiting_for_peer_name', 'config_name_for_peer', 'waiting_for_peer_data']:
         if key in context.user_data:
@@ -1785,7 +1809,10 @@ async def handle_add_peer(query, context: CallbackContext, config_name: str):
     message += "• Ejemplo: `mi-celular`, `laptop-juan`, `servidor-01`\n\n"
     message += "Envía el nombre ahora o escribe */cancel* para cancelar."
     
-    keyboard = [[InlineKeyboardButton("⬅️ Cancelar", callback_data=f"cfg:{config_name}")]]
+    if is_operator(user_id):
+        keyboard = [[InlineKeyboardButton("⬅️ Cancelar", callback_data="operator_main_menu")]]
+    else:
+        keyboard = [[InlineKeyboardButton("⬅️ Cancelar", callback_data=f"cfg:{config_name}")]]
     
     await query.edit_message_text(
         message,
@@ -1795,30 +1822,53 @@ async def handle_add_peer(query, context: CallbackContext, config_name: str):
 
 async def handle_download_peer_config(query, context: CallbackContext, peer_hash: str):
     """Descarga la configuración de un peer usando hash"""
+    user_id = query.from_user.id
+    
     await query.edit_message_text("📥 Descargando configuración...")
     
     try:
-        # Obtener datos del peer desde el contexto usando el hash
+        # Obtener datos del peer desde el contexto
         peer_data = context.user_data.get(f'peer_{peer_hash}')
+        
+        # Si no está en el contexto, verificar si es operador y buscar en su DB
+        if not peer_data and is_operator(user_id):
+            operator_peer = operators_db.get_peer_by_hash(user_id, peer_hash)
+            if operator_peer:
+                # Reconstruir datos del peer
+                peer_data = {
+                    'config_name': operator_peer['config_name'],
+                    'peer_name': operator_peer['peer_name'],
+                    'public_key': operator_peer['public_key'],
+                    'endpoint': operator_peer.get('endpoint'),  # Obtener endpoint guardado
+                    # Nota: Para operadores, no tenemos las claves privadas en DB
+                    # Solo permitiremos descargar plantilla
+                }
+        
         if not peer_data:
             await query.edit_message_text(
                 f"❌ No se pudo encontrar la información del peer.\n"
-                f"La información puede haber expirado. Por favor, crea un nuevo peer.",
-                reply_markup=back_button("main_menu")
+                f"La información puede haber expirado o no tienes permisos.",
+                reply_markup=operator_main_menu() if is_operator(user_id) else main_menu(is_admin(user_id), is_operator(user_id))
             )
             return
         
         config_name = peer_data['config_name']
         peer_name = peer_data['peer_name']
-        public_key = peer_data['public_key']
-        private_key = peer_data['private_key']
-        preshared_key = peer_data['preshared_key']
-        allowed_ip = peer_data['allowed_ip']
+        public_key = peer_data.get('public_key', '')
+        private_key = peer_data.get('private_key', '')
+        preshared_key = peer_data.get('preshared_key', '')
+        allowed_ip = peer_data.get('allowed_ip', '10.21.0.2/32')
+        endpoint = peer_data.get('endpoint', '')  # Obtener endpoint personalizado
         
-        # Obtener información del servidor
+        # Si es operador y no tiene clave privada, solo puede descargar plantilla
+        if is_operator(user_id) and not private_key:
+            await handle_operator_download_template(query, context, config_name, peer_name, public_key, endpoint, user_id)
+            return
+        
+        # Obtener información del servidor (usar endpoint personalizado si existe)
         from config import WG_API_BASE_URL
+        import urllib.parse
         
-        # Extraer el host y puerto de la URL base
         parsed_url = urllib.parse.urlparse(WG_API_BASE_URL)
         server_host = parsed_url.hostname
         
@@ -1827,7 +1877,7 @@ async def handle_download_peer_config(query, context: CallbackContext, peer_hash
         if not config_result.get("status"):
             await query.edit_message_text(
                 f"❌ No se pudo obtener información de la configuración",
-                reply_markup=back_button(f"cfg:{config_name}")
+                reply_markup=operator_main_menu() if is_operator(user_id) else back_button(f"cfg:{config_name}")
             )
             return
         
@@ -1838,9 +1888,17 @@ async def handle_download_peer_config(query, context: CallbackContext, peer_hash
         if not server_public_key:
             await query.edit_message_text(
                 f"❌ No se pudo obtener la clave pública del servidor",
-                reply_markup=back_button(f"cfg:{config_name}")
+                reply_markup=operator_main_menu() if is_operator(user_id) else back_button(f"cfg:{config_name}")
             )
             return
+        
+        # Usar endpoint personalizado si existe, de lo contrario usar el del servidor
+        if endpoint:
+            # endpoint ya viene en formato host:puerto
+            endpoint_host, endpoint_port = endpoint.split(':')
+        else:
+            endpoint_host = server_host
+            endpoint_port = listen_port
         
         # Construir el contenido del archivo .conf
         config_content = f"""[Interface]
@@ -1851,7 +1909,7 @@ DNS = 1.1.1.1
 [Peer]
 PublicKey = {server_public_key}
 AllowedIPs = 0.0.0.0/0
-Endpoint = {server_host}:{listen_port}
+Endpoint = {endpoint_host}:{endpoint_port}
 PersistentKeepalive = 21"""
         
         # Agregar pre-shared key si existe
@@ -1862,6 +1920,7 @@ PersistentKeepalive = 21"""
         filename = f"{peer_name}_{config_name}.conf"
         
         # Crear un archivo en memoria
+        import io
         file_like = io.BytesIO(config_content.encode('utf-8'))
         file_like.name = filename
         
@@ -1872,25 +1931,49 @@ PersistentKeepalive = 21"""
         )
         
         # Luego actualizar el mensaje original
-        await query.edit_message_text(
-            f"✅ *Configuración descargada*\n\n"
-            f"El archivo `{filename}` ha sido enviado.\n\n"
-            f"*Información de conexión:*\n"
-            f"• Servidor: `{server_host}:{listen_port}`\n"
-            f"• IP asignada: `{allowed_ip}`\n"
-            f"• DNS: `1.1.1.1`\n\n"
-            f"*Instrucciones:*\n"
-            f"1. Guarda este archivo en tu dispositivo\n"
-            f"2. Importa en tu cliente WireGuard\n"
-            f"3. Conéctate y ¡listo!",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("⬅️ Volver a Configuración", callback_data=f"cfg:{config_name}"),
-                    InlineKeyboardButton("🔄 Descargar de nuevo", callback_data=f"download_config:{peer_hash}")
-                ]
-            ]),
-            parse_mode="Markdown"
-        )
+        if is_operator(user_id):
+            # Para operadores: botón para volver al menú
+            keyboard = [
+                [InlineKeyboardButton("⬅️ Volver al Menú", callback_data="operator_main_menu")],
+                [InlineKeyboardButton("📥 Descargar de nuevo", callback_data=f"download_config:{peer_hash}")]
+            ]
+            
+            await query.edit_message_text(
+                f"✅ *Configuración descargada*\n\n"
+                f"El archivo `{filename}` ha sido enviado.\n\n"
+                f"*Información de conexión:*\n"
+                f"• Servidor: `{endpoint_host}:{endpoint_port}`\n"
+                f"• IP asignada: `{allowed_ip}`\n"
+                f"• DNS: `1.1.1.1`\n\n"
+                f"*Instrucciones:*\n"
+                f"1. Guarda este archivo en tu dispositivo\n"
+                f"2. Importa en tu cliente WireGuard\n"
+                f"3. Conéctate y ¡listo!\n\n"
+                f"⚠️ *Recuerda:* Este peer tiene límites automáticos de 1GB/24h.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+        else:
+            # Para admins: botones normales
+            await query.edit_message_text(
+                f"✅ *Configuración descargada*\n\n"
+                f"El archivo `{filename}` ha sido enviado.\n\n"
+                f"*Información de conexión:*\n"
+                f"• Servidor: `{endpoint_host}:{endpoint_port}`\n"
+                f"• IP asignada: `{allowed_ip}`\n"
+                f"• DNS: `1.1.1.1`\n\n"
+                f"*Instrucciones:*\n"
+                f"1. Guarda este archivo en tu dispositivo\n"
+                f"2. Importa en tu cliente WireGuard\n"
+                f"3. Conéctate y ¡listo!",
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("⬅️ Volver a Configuración", callback_data=f"cfg:{config_name}"),
+                        InlineKeyboardButton("📥 Descargar de nuevo", callback_data=f"download_config:{peer_hash}")
+                    ]
+                ]),
+                parse_mode="Markdown"
+            )
         
     except Exception as e:
         logger.error(f"Error al descargar configuración: {str(e)}")
@@ -1898,131 +1981,10 @@ PersistentKeepalive = 21"""
             f"❌ *Error al descargar configuración*\n\n"
             f"*Error:* {str(e)}\n\n"
             f"Intenta obtener la configuración manualmente desde el dashboard.",
-            reply_markup=back_button("main_menu"),
+            reply_markup=operator_main_menu() if is_operator(user_id) else back_button("main_menu"),
             parse_mode="Markdown"
         )
 
-async def handle_peer_download_list(query, context: CallbackContext, config_name: str, peer_index: str, peer_hash: str):
-    """Descarga la configuración de un peer desde la lista usando índice"""
-    await query.edit_message_text(f"📥 Obteniendo información del peer...")
-    
-    try:
-        idx = int(peer_index)
-        
-        # Obtener la lista de peers actualizada
-        result = api_client.get_peers(config_name)
-        if not result.get("status"):
-            await query.edit_message_text(
-                f"❌ Error al obtener la lista de peers: {result.get('message')}",
-                reply_markup=back_button(f"peers:{config_name}")
-            )
-            return
-        
-        peers = result.get("data", [])
-        
-        if idx < 0 or idx >= len(peers):
-            await query.edit_message_text(
-                f"❌ Índice de peer inválido",
-                reply_markup=back_button(f"peers:{config_name}")
-            )
-            return
-        
-        peer = peers[idx]
-        peer_name = peer.get('name', 'Sin nombre')
-        public_key = peer.get('id', '')
-        allowed_ip = peer.get('allowed_ip', '10.21.0.2/32')
-        
-        # Buscar en el contexto si tenemos información completa de este peer
-        peer_data = context.user_data.get(f'peer_{peer_hash}')
-        
-        if peer_data and peer_data.get('public_key') == public_key:
-            # Tenemos información completa, usar la función de descarga normal
-            await handle_download_peer_config(query, context, peer_hash)
-        else:
-            # No tenemos la clave privada, ofrecer plantilla
-            await query.edit_message_text(f"🔄 Generando plantilla para {peer_name}...")
-            
-            # Obtener información del servidor
-            from config import WG_API_BASE_URL
-            
-            parsed_url = urllib.parse.urlparse(WG_API_BASE_URL)
-            server_host = parsed_url.hostname
-            
-            # Obtener información de la configuración
-            config_result = api_client.get_configuration_detail(config_name)
-            if not config_result.get("status"):
-                await query.edit_message_text(
-                    f"❌ No se pudo obtener información de la configuración",
-                    reply_markup=back_button(f"peers:{config_name}")
-                )
-                return
-            
-            config_data = config_result.get("data", {})
-            listen_port = config_data.get('ListenPort', '51820')
-            server_public_key = config_data.get('PublicKey', '')
-            dns = peer.get('DNS', '1.1.1.1')
-            
-            # Crear plantilla de configuración
-            template = f"""# Configuración WireGuard para {peer_name}
-# Completa la información faltante
-
-[Interface]
-PrivateKey = [TU_CLAVE_PRIVADA_AQUÍ]
-Address = {allowed_ip}
-DNS = {dns}
-
-[Peer]
-PublicKey = {server_public_key}
-AllowedIPs = 0.0.0.0/0
-Endpoint = {server_host}:{listen_port}
-PersistentKeepalive = 21"""
-            
-            # Nombre del archivo
-            filename = f"{peer_name}_{config_name}_plantilla.conf"
-            
-            file_like = io.BytesIO(template.encode('utf-8'))
-            file_like.name = filename
-            
-            # Enviar el archivo
-            await query.message.reply_document(
-                document=InputFile(file_like, filename=filename),
-                caption=f"📄 Plantilla de configuración para {peer_name}"
-            )
-            
-            # Actualizar mensaje original
-            await query.edit_message_text(
-                f"📄 *Plantilla generada para {peer_name}*\n\n"
-                f"Se ha enviado una plantilla de configuración.\n\n"
-                f"*Información incluida:*\n"
-                f"• IP: `{allowed_ip}`\n"
-                f"• DNS: `{dns}`\n"
-                f"• Servidor: `{server_host}:{listen_port}`\n"
-                f"• Clave pública del servidor: `{server_public_key[:30]}...`\n\n"
-                f"*Para completar:*\n"
-                f"1. Reemplaza `[TU_CLAVE_PRIVADA_AQUÍ]` con la clave privada\n"
-                f"2. Guarda el archivo como `{peer_name}.conf`\n"
-                f"3. Importa en tu cliente WireGuard\n\n"
-                f"*Nota:* La clave privada solo está disponible al crear el peer.",
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("⬅️ Volver a Lista", callback_data=f"peers:{config_name}"),
-                        InlineKeyboardButton("➕ Crear nuevo Peer", callback_data=f"add_peer:{config_name}")
-                    ]
-                ]),
-                parse_mode="Markdown"
-            )
-    
-    except Exception as e:
-        logger.error(f"Error al descargar desde lista: {str(e)}")
-        await query.edit_message_text(
-            f"❌ *Error al descargar configuración*\n\n"
-            f"*Error:* {str(e)}\n\n"
-            f"Intenta obtener la configuración desde el panel web de WGDashboard.",
-            reply_markup=back_button(f"peers:{config_name}"),
-            parse_mode="Markdown"
-        )
-
-# ================= HANDLERS DE SCHEDULE JOBS (ACTUALIZADOS) ================= #
 async def handle_schedule_jobs_menu(query, context: CallbackContext, config_name: str):
     """Muestra el menú inicial de Schedule Jobs con lista de peers"""
     await query.edit_message_text(f"⏰ Obteniendo peers de {config_name}...")
@@ -2709,7 +2671,39 @@ async def handle_stats(query):
 
 async def handle_help(query):
     """Muestra la ayuda"""
-    help_text = """📚 *Ayuda del Bot WGDashboard*
+    user_id = query.from_user.id
+    
+    if is_operator(user_id):
+        help_text = """📚 *Ayuda para Operadores*
+
+*Tu función:*
+1. *Crear Peer Temporal*:
+   - Usa el botón '➕ Crear Peer'
+   - Proporciona un nombre
+   - El bot genera automáticamente:
+     • Claves WireGuard
+     • IP única
+     • Límite de 1 GB de datos
+     • Expiración en 24 horas
+   - Descarga el archivo .conf
+
+*Límites:*
+• ⏰ Solo 1 peer cada 24 horas
+• 📊 1 GB de datos por peer
+• ⏳ 24 horas de duración
+
+*Comandos:*
+/start - Menú principal
+/help - Esta ayuda
+/cancel - Cancelar operación en curso"""
+        
+        await query.edit_message_text(
+            help_text,
+            reply_markup=operator_main_menu(),
+            parse_mode="Markdown"
+        )
+    else:
+        help_text = """📚 *Ayuda del Bot WGDashboard*
 
 *Navegación:*
 • Usa los botones para navegar entre menús
@@ -2748,10 +2742,128 @@ async def handle_help(query):
 /stats - Estadísticas del sistema
 /configs - Listar configuraciones
 /cancel - Cancelar operación en curso"""
+        
+        await query.edit_message_text(
+            help_text,
+            reply_markup=main_menu(),
+            parse_mode="Markdown"
+        )
+
+async def handle_operators_list(query, context: CallbackContext):
+    """Muestra la lista de operadores"""
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.edit_message_text(
+            "❌ *Acceso restringido*\n\n"
+            "Esta función solo está disponible para administradores.",
+            reply_markup=main_menu(is_admin(user_id), is_operator(user_id)),
+            parse_mode="Markdown"
+        )
+        return
+    
+    await query.edit_message_text("👷 Obteniendo información de operadores...")
+    
+    # Obtener información de todos los operadores
+    operators_info = []
+    
+    # Filtrar solo usuarios con rol operator
+    operator_users = {uid: info for uid, info in ALLOWED_USERS.items() 
+                     if info.get('role') == ROLE_OPERATOR}
+    
+    if not operator_users:
+        await query.edit_message_text(
+            "ℹ️ No hay operadores registrados en el sistema.",
+            reply_markup=refresh_button("operators_list"),
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Construir mensaje con información detallada
+    message_lines = ["👷 *Información de Operadores*\n"]
+    
+    total_peers_created = 0
+    
+    for uid, user_info in operator_users.items():
+        user_name = user_info.get('name', f'ID: {uid}')
+        
+        # Obtener peers creados por este operador
+        user_peers = operators_db.get_user_peers(uid)
+        num_peers = len(user_peers)
+        total_peers_created += num_peers
+        
+        # Verificar si puede crear otro peer
+        can_create, error_msg, next_allowed = can_operator_create_peer(uid)
+        
+        # Formatear información del operador
+        message_lines.append(f"\n**{user_name}**")
+        message_lines.append(f"  👤 ID: `{uid}`")
+        message_lines.append(f"  📊 Peers creados: {num_peers}")
+        
+        # Información del último peer creado
+        if user_peers:
+            user_peers.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+            last_peer = user_peers[0]
+            
+            # Usamos datetime ya importado al principio del archivo
+            try:
+                last_created = datetime.fromisoformat(last_peer.get('created_at', ''))
+                last_created_str = last_created.strftime("%d/%m/%Y %H:%M")
+            except:
+                last_created_str = "Fecha desconocida"
+            
+            message_lines.append(f"  🕒 Último peer: {last_peer.get('peer_name')} ({last_created_str})")
+            message_lines.append(f"  🔧 Configuración: {last_peer.get('config_name')}")
+            
+            # Mostrar endpoint si está disponible
+            endpoint = last_peer.get('endpoint')
+            if endpoint:
+                message_lines.append(f"  🌐 Endpoint: `{endpoint}`")
+        
+        # Estado de creación
+        if can_create:
+            message_lines.append(f"  ✅ *Puede crear otro peer ahora*")
+        else:
+            if next_allowed:
+                now = datetime.now()
+                remaining = next_allowed - now
+                hours = int(remaining.total_seconds() // 3600)
+                minutes = int((remaining.total_seconds() % 3600) // 60)
+                
+                if hours > 0:
+                    time_msg = f"{hours}h {minutes}m"
+                else:
+                    time_msg = f"{minutes}m"
+                
+                message_lines.append(f"  ⏳ *Puede crear otro peer en: {time_msg}*")
+            else:
+                message_lines.append(f"  ❌ *No puede crear más peers*")
+    
+    # Resumen general
+    message_lines.append(f"\n📊 **Resumen General**")
+    message_lines.append(f"• 👷 Operadores: {len(operator_users)}")
+    message_lines.append(f"• 📈 Total peers creados: {total_peers_created}")
+    # Usamos datetime ya importado al principio del archivo
+    message_lines.append(f"• 📅 Última actualización: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    
+    message = "\n".join(message_lines)
+    
+    # Crear teclado con acciones adicionales
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Actualizar", callback_data="operators_list"),
+            InlineKeyboardButton("📊 Ver detalles", callback_data="operators_detailed")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Menú Principal", callback_data="main_menu")
+        ]
+    ]
     
     await query.edit_message_text(
-        help_text,
-        reply_markup=main_menu(),
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
 
@@ -2762,9 +2874,22 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     message_text = update.message.text.strip()
+    user_id = update.effective_user.id
     
-    # Comando /cancel
+    # Comando /cancel (mantener funcionalidad pero no mencionarlo en ayuda)
     if message_text.lower() == '/cancel':
+        # Limpiar estado de creación de peer para operador
+        if context.user_data.get('waiting_for_operator_peer_name', False):
+            for key in ['waiting_for_operator_peer_name', 'config_name_for_operator_peer']:
+                if key in context.user_data:
+                    del context.user_data[key]
+            
+            await update.message.reply_text(
+                "✅ Creación de peer cancelada.",
+                reply_markup=operator_main_menu() if is_operator(user_id) else main_menu(is_admin(user_id), is_operator(user_id))
+            )
+            return
+        
         # Limpiar estado de schedule job si está activo
         if context.user_data.get('waiting_for_schedule_job_value', False):
             for key in ['configuring_schedule_job', 'schedule_job_config_name', 'schedule_job_peer_index',
@@ -2775,17 +2900,54 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             
             await update.message.reply_text(
                 "✅ Configuración de Schedule Job cancelada.",
-                parse_mode=None
+                reply_markup=operator_main_menu() if is_operator(user_id) else main_menu(is_admin(user_id), is_operator(user_id))
             )
             return
         
-        # Limpiar estado de agregar peer
+        # Limpiar estado de agregar peer normal
         for key in ['waiting_for_peer_name', 'config_name_for_peer', 'waiting_for_peer_data']:
             if key in context.user_data:
                 del context.user_data[key]
         
+        if is_operator(user_id):
+            await update.message.reply_text(
+                "✅ Operación cancelada.",
+                reply_markup=operator_main_menu()
+            )
+        else:
+            await update.message.reply_text(
+                "✅ Operación cancelada. Usa /start para volver al menú principal.",
+                reply_markup=main_menu(is_admin(user_id), is_operator(user_id))
+            )
+        return
+    
+    # Si es operador, solo permitir flujos específicos
+    if is_operator(user_id):
+        # Permitir el comando /help
+        if message_text.lower() == '/help':
+            # Ya está manejado por help_command, pero lo redirigimos
+            await help_command(update, context)
+            return
+        
+        # Permitir el comando /start
+        if message_text.lower() == '/start':
+            # Ya está manejado por start_command, pero lo redirigimos
+            await start_command(update, context)
+            return
+        
+    # Verificar si estamos en un flujo permitido para operadores
+    if (context.user_data.get('waiting_for_operator_peer_name', False) or 
+        context.user_data.get('waiting_for_operator_peer_endpoint', False) or  # ¡NUEVA CONDICIÓN!
+        context.user_data.get('waiting_for_schedule_job_value', False) or
+        context.user_data.get('waiting_for_peer_name', False)):
+    # Continuar con el flujo normal
+        pass
+    else:
+    # Si no está en un flujo permitido, ignorar el mensaje
         await update.message.reply_text(
-            "✅ Operación cancelada. Usa /start para volver al menú principal.",
+            "❌ Los operadores solo pueden usar los botones del menú.\n\n"
+            "Por favor, usa /start para ver el menú de opciones.",
+            reply_markup=operator_main_menu(),
             parse_mode=None
         )
         return
@@ -2835,6 +2997,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             
         else:  # job_type == 'date'
             # Validar formato de fecha dd/mm/aaaa
+            import re
             from datetime import datetime
             
             if not re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', value):
@@ -2912,6 +3075,98 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         
         return
     
+    # Verificar si operador está enviando nombre para peer
+    elif context.user_data.get('waiting_for_operator_peer_name', False):
+        config_name = context.user_data.get('config_name_for_operator_peer')
+        
+        # Validar el nombre
+        if not message_text or len(message_text) > 32:
+            await update.message.reply_text(
+                "❌ Nombre inválido. Debe tener máximo 32 caracteres.\n"
+                "Por favor, envía un nombre válido o escribe /cancel para cancelar.",
+                parse_mode=None
+            )
+            return
+        
+        # Verificar caracteres válidos
+        import re
+        if not re.match(r'^[a-zA-Z0-9\-_]+$', message_text):
+            await update.message.reply_text(
+                "❌ Nombre inválido. Solo se permiten letras, números, guiones y guiones bajos.\n"
+                "Por favor, envía un nombre válido o escribe /cancel para cancelar.",
+                parse_mode=None
+            )
+            return
+        
+        peer_name = message_text
+
+        # Guardar el nombre y cambiar al estado de espera del endpoint
+        context.user_data['operator_peer_name'] = peer_name
+        context.user_data['waiting_for_operator_peer_endpoint'] = True
+        context.user_data['waiting_for_operator_peer_name'] = False
+        
+        await update.message.reply_text(
+            f"✅ Nombre aceptado: *{peer_name}*\n\n"
+            f"🌐 Ahora envía el *endpoint* para este peer:\n\n"
+            f"*Formato:* `dominio.com:51820` o `IP:PUERTO`\n"
+            f"*Ejemplos:*\n"
+            f"• `vpn.midominio.com:51820`\n"
+            f"• `192.168.1.100:51820`\n"
+            f"• `servidor-vpn.com:443`\n\n"
+            f"Envía el endpoint ahora o escribe */cancel* para cancelar.",
+            parse_mode="Markdown"
+        )
+        return        
+
+    # Verificar si operador está enviando endpoint para peer
+    elif context.user_data.get('waiting_for_operator_peer_endpoint', False):
+        endpoint = message_text.strip()
+        
+        # Validar formato básico de endpoint
+        import re
+        if not re.match(r'^[a-zA-Z0-9\.\-]+:\d+$', endpoint):
+            await update.message.reply_text(
+                "❌ Formato de endpoint inválido. Debe ser `dominio:puerto` o `IP:puerto`.\n"
+                "Por favor, envía un endpoint válido o escribe /cancel para cancelar.",
+                parse_mode=None
+            )
+            return    
+
+        # Verificar que el puerto sea válido
+        try:
+            host, port = endpoint.split(':')
+            port_num = int(port)
+            if port_num < 1 or port_num > 65535:
+                raise ValueError
+        except:
+            await update.message.reply_text(
+                "❌ Puerto inválido. Debe ser un número entre 1 y 65535.\n"
+                "Por favor, envía un endpoint válido o escribe /cancel para cancelar.",
+                parse_mode=None
+            )
+            return
+
+        # Obtener el nombre y configuración guardados
+        peer_name = context.user_data.get('operator_peer_name')
+        config_name = context.user_data.get('config_name_for_operator_peer')
+        
+        # Limpiar estados
+        for key in ['waiting_for_operator_peer_endpoint', 'operator_peer_name', 'config_name_for_operator_peer']:
+            if key in context.user_data:
+                del context.user_data[key]
+        
+        # Generar el peer con el endpoint proporcionado
+        await generate_peer_automatically(update, context, config_name, peer_name, user_id, endpoint)
+        return
+
+        # Limpiar el estado
+        del context.user_data['waiting_for_operator_peer_name']
+        del context.user_data['config_name_for_operator_peer']
+        
+        # Generar el peer automáticamente (para operador)
+        await generate_peer_automatically(update, context, config_name, peer_name, user_id)
+        return
+    
     # Verificar si estamos esperando un nombre para generar un peer automáticamente
     elif context.user_data.get('waiting_for_peer_name', False):
         config_name = context.user_data.get('config_name_for_peer')
@@ -2926,6 +3181,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         
         # Verificar caracteres válidos
+        import re
         if not re.match(r'^[a-zA-Z0-9\-_]+$', message_text):
             await update.message.reply_text(
                 "❌ Nombre inválido. Solo se permiten letras, números, guiones y guiones bajos.\n"
@@ -2941,19 +3197,65 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         del context.user_data['config_name_for_peer']
         
         # Generar el peer automáticamente
-        await generate_peer_automatically(update, context, config_name, peer_name)
+        await generate_peer_automatically(update, context, config_name, peer_name, user_id)
         return
     
-    # Si no es ninguno de los casos anteriores, mostrar mensaje de ayuda
-    else:
+    # Si no es ninguno de los casos anteriores y es operador, mostrar mensaje específico
+    elif is_operator(user_id):
+        await update.message.reply_text(
+            "❌ Los operadores solo pueden usar los botones del menú.\n\n"
+            "Por favor, usa /start para ver el menú de opciones.",
+            reply_markup=operator_main_menu(),
+            parse_mode=None
+        )
+        return
+    
+    # Si es admin y no es un flujo conocido
+    elif is_admin(user_id):
         await update.message.reply_text(
             "No entiendo ese comando. Usa /help para ver los comandos disponibles o selecciona una opción del menú.\n\n"
             "También puedes usar /cancel si tienes una operación en curso.",
+            reply_markup=main_menu(is_admin(user_id), is_operator(user_id)),
             parse_mode=None
         )
 
-async def generate_peer_automatically(update: Update, context: ContextTypes.DEFAULT_TYPE, config_name: str, peer_name: str):
-    """Genera un peer automáticamente con el nombre proporcionado"""
+async def generate_peer_automatically(update: Update, context: ContextTypes.DEFAULT_TYPE, config_name: str, peer_name: str, user_id: int, endpoint: str = None):
+    """Genera un peer automáticamente con el nombre y endpoint proporcionado"""
+    
+    # SI ES OPERADOR: VERIFICACIÓN DOBLE DE SEGURIDAD
+    if is_operator(user_id):
+        logger.info(f"Verificación doble para operador {user_id}")
+        can_create, error_msg, next_allowed = can_operator_create_peer(user_id)
+        
+        if not can_create:
+            if next_allowed:
+                remaining = next_allowed - datetime.now()
+                hours = int(remaining.total_seconds() // 3600)
+                minutes = int((remaining.total_seconds() % 3600) // 60)
+                
+                if hours > 0:
+                    time_msg = f"{hours} horas y {minutes} minutos"
+                else:
+                    time_msg = f"{minutes} minutos"
+                
+                await update.message.reply_text(
+                    f"⏰ *Límite alcanzado*\n\n"
+                    f"{error_msg}\n\n"
+                    f"⏳ Tiempo restante: *{time_msg}*\n\n"
+                    f"Puedes crear otro peer después de este tiempo.",
+                    reply_markup=operator_main_menu(),
+                    parse_mode="Markdown"
+                )
+                return
+            else:
+                await update.message.reply_text(
+                    f"❌ *No puedes crear más peers*\n\n"
+                    f"{error_msg}",
+                    reply_markup=operator_main_menu(),
+                    parse_mode="Markdown"
+                )
+                return
+    
     await update.message.reply_text(f"⚙️ Generando peer '{peer_name}' para {config_name}...")
     
     # 1. Generar claves WireGuard y pre-shared key
@@ -3023,7 +3325,7 @@ async def generate_peer_automatically(update: Update, context: ContextTypes.DEFA
     result = api_client.add_peer(config_name, peer_data)
     
     if result.get("status"):
-        # Crear un hash único para este peer
+        # Generar un hash para identificar el peer
         peer_hash = create_peer_hash(config_name, public_key, peer_name)
         
         # Guardar datos del peer en el contexto para descarga posterior
@@ -3033,31 +3335,92 @@ async def generate_peer_automatically(update: Update, context: ContextTypes.DEFA
             'public_key': public_key,
             'private_key': private_key,
             'preshared_key': preshared_key,
-            'allowed_ip': allowed_ip
+            'allowed_ip': allowed_ip,
+            'endpoint': endpoint
         }
+
+        # ================= JOBS AUTOMÁTICOS PARA OPERADORES ================= #
+        if is_operator(user_id):
+            # Registrar peer en base de datos de operadores
+            operators_db.register_peer(user_id, config_name, peer_name, public_key, endpoint)
+            
+            # Crear job de límite de datos (1 GB)
+            job_data_gb = {
+                "Field": "total_data",
+                "Value": str(OPERATOR_DATA_LIMIT_GB),
+                "Operator": "lgt"
+            }
+            
+            # Crear job de límite de tiempo (24 horas)
+            expire_date = (datetime.now() + timedelta(hours=OPERATOR_TIME_LIMIT_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+            job_data_date = {
+                "Field": "date",
+                "Value": expire_date,
+                "Operator": "lgt"
+            }
+            
+            # Enviar jobs a la API
+            await update.message.reply_text("⏰ Configurando límites automáticos...")
+            
+            result_gb = api_client.create_schedule_job(config_name, public_key, job_data_gb)
+            result_date = api_client.create_schedule_job(config_name, public_key, job_data_date)
+            
+            jobs_status = ""
+            if result_gb.get("status") and result_date.get("status"):
+                jobs_status = "✅ *Límites configurados correctamente:*\n• 📊 1 GB de datos\n• ⏳ 24 horas de duración\n\n"
+            else:
+                jobs_status = "⚠️ *Límites configurados con advertencias:*\n"
+                if not result_gb.get("status"):
+                    jobs_status += f"• ❌ Error en límite de datos: {result_gb.get('message')}\n"
+                if not result_date.get("status"):
+                    jobs_status += f"• ❌ Error en límite de tiempo: {result_date.get('message')}\n"
+                jobs_status += "\n"
         
-        # Formatear mensaje
-        message = f"✅ *Peer '{peer_name}' agregado correctamente a {config_name}*\n\n"
-        message += f"*Información del peer:*\n"
-        message += f"• 🏷️ Nombre: `{peer_name}`\n"
-        message += f"• 🌐 IP asignada: `{allowed_ip}`\n"
-        message += f"• 🔗 DNS: `1.1.1.1`\n"
-        message += f"• ⏱️ Keepalive: `21`\n"
-        message += f"• 📡 MTU: `1420`\n\n"
-        message += f"*Claves generadas:*\n"
-        message += f"• 🔑 Clave pública:\n`{public_key}`\n\n"
-        message += f"• 🔐 Clave privada:\n`{private_key}`\n\n"
-        message += f"• 🔒 Pre-shared key:\n`{preshared_key}`\n\n"
-        message += f"⚠️ *¡GUARDA TODAS LAS CLAVES DE FORMA SEGURA!*\n"
-        message += f"Estas claves solo se mostrarán una vez y son necesarias para configurar el cliente."
-        
-        # Crear teclado con botones de volver y descargar
-        keyboard = [
-            [
-                InlineKeyboardButton("⬅️ Volver a Configuración", callback_data=f"cfg:{config_name}"),
-                InlineKeyboardButton("📥 Descargar Configuración", callback_data=f"download_config:{peer_hash}")
+        # ================= MENSAJE FINAL SEGÚN ROL ================= #
+        if is_operator(user_id):
+            message = f"✅ *Peer '{peer_name}' creado correctamente*\n\n"
+            message += f"*Configuración:* {config_name}\n"
+            message += f"*IP asignada:* `{allowed_ip}`\n"
+            message += f"*Endpoint:* `{endpoint}`\n"
+            message += f"*DNS:* `1.1.1.1`\n\n"
+            message += jobs_status
+            message += f"*Claves generadas:*\n"
+            message += f"• 🔑 Clave pública: `{public_key[:30]}...`\n"
+            message += f"• 🔐 Clave privada: `{private_key[:30]}...`\n"
+            message += f"• 🔒 Pre-shared key: `{preshared_key[:30]}...`\n\n"
+            message += f"⚠️ *IMPORTANTE:*\n"
+            message += f"• Guarda las claves de forma segura\n"
+            message += f"• Este peer tiene límites automáticos\n"
+            message += f"• Podrás crear otro peer en 24 horas"
+            
+            # Para operadores, mostrar solo botón de descarga
+            keyboard = [
+                [InlineKeyboardButton("📥 Descargar Configuración", callback_data=f"download_config:{peer_hash}")],
+                [InlineKeyboardButton("⬅️ Volver", callback_data="operator_main_menu")]
             ]
-        ]
+            
+        else:  # Admin
+            message = f"✅ *Peer '{peer_name}' agregado correctamente a {config_name}*\n\n"
+            message += f"*Información del peer:*\n"
+            message += f"• 🏷️ Nombre: `{peer_name}`\n"
+            message += f"• 🌐 IP asignada: `{allowed_ip}`\n"
+            message += f"• 🔗 DNS: `1.1.1.1`\n"
+            message += f"• ⏱️ Keepalive: `21`\n"
+            message += f"• 📡 MTU: `1420`\n\n"
+            message += f"*Claves generadas:*\n"
+            message += f"• 🔑 Clave pública:\n`{public_key}`\n\n"
+            message += f"• 🔐 Clave privada:\n`{private_key}`\n\n"
+            message += f"• 🔒 Pre-shared key:\n`{preshared_key}`\n\n"
+            message += f"⚠️ *¡GUARDA TODAS LAS CLAVES DE FORMA SEGURA!*"
+            
+            # Para admins, mostrar botones normales
+            keyboard = [
+                [
+                    InlineKeyboardButton("⬅️ Volver a Configuración", callback_data=f"cfg:{config_name}"),
+                    InlineKeyboardButton("📥 Descargar Configuración", callback_data=f"download_config:{peer_hash}")
+                ]
+            ]
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
@@ -3068,8 +3431,11 @@ async def generate_peer_automatically(update: Update, context: ContextTypes.DEFA
     else:
         error_msg = result.get('message', 'Error desconocido')
         
-        # Crear teclado con botón para volver
-        keyboard = [[InlineKeyboardButton("⬅️ Volver a Configuración", callback_data=f"cfg:{config_name}")]]
+        if is_operator(user_id):
+            keyboard = [[InlineKeyboardButton("⬅️ Volver", callback_data="operator_main_menu")]]
+        else:
+            keyboard = [[InlineKeyboardButton("⬅️ Volver a Configuración", callback_data=f"cfg:{config_name}")]]
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
@@ -3077,4 +3443,234 @@ async def generate_peer_automatically(update: Update, context: ContextTypes.DEFA
             f"Intenta nuevamente o contacta al administrador.",
             parse_mode="Markdown",
             reply_markup=reply_markup
+        )
+
+# ================= HANDLERS PARA OPERADORES ================= #
+
+async def handle_operator_create_peer(query, context: CallbackContext):
+    """Inicia el proceso de creación de peer para operador"""
+    user_id = query.from_user.id
+    
+    # Log para depuración
+    logger.info(f"Operador {user_id} intentando crear peer")
+    
+    # Verificar si puede crear peer
+    can_create, error_msg, next_allowed = can_operator_create_peer(user_id)
+    
+    logger.info(f"Resultado verificación: puede_crear={can_create}, mensaje={error_msg}")
+    
+    # Generar un identificador único para evitar mensajes idénticos
+    import time
+    timestamp = int(time.time())
+    
+    if not can_create:
+        if next_allowed:
+            remaining = next_allowed - datetime.now()
+            hours = int(remaining.total_seconds() // 3600)
+            minutes = int((remaining.total_seconds() % 3600) // 60)
+            
+            if hours > 0:
+                time_msg = f"{hours} horas y {minutes} minutos"
+            else:
+                time_msg = f"{minutes} minutos"
+            
+            # Agregar timestamp al final del mensaje para hacerlo único
+            message_text = f"⏰ *Límite alcanzado* ({timestamp})\n\n" \
+                          f"{error_msg}\n\n" \
+                          f"⏳ Tiempo restante: *{time_msg}*\n\n" \
+                          f"Puedes crear otro peer después de este tiempo."
+            
+            await query.edit_message_text(
+                message_text,
+                reply_markup=operator_main_menu(),
+                parse_mode="Markdown"
+            )
+            return
+        else:
+            await query.edit_message_text(
+                f"❌ *No puedes crear más peers* ({timestamp})\n\n"
+                f"{error_msg}",
+                reply_markup=operator_main_menu(),
+                parse_mode="Markdown"
+            )
+            return
+    
+    # Obtener la primera configuración disponible
+    result = api_client.get_configurations()
+    if not result.get("status"):
+        await query.edit_message_text(
+            f"❌ Error: {result.get('message', 'Error desconocido')} ({timestamp})",
+            reply_markup=operator_main_menu()
+        )
+        return
+    
+    configs = result.get("data", [])
+    if not configs:
+        await query.edit_message_text(
+            f"⚠️ No hay configuraciones disponibles ({timestamp})",
+            reply_markup=operator_main_menu()
+        )
+        return
+    
+    # Usar la primera configuración
+    config_name = configs[0].get('Name')
+    
+    # Guardar en el contexto que estamos esperando un nombre
+    context.user_data['waiting_for_operator_peer_name'] = True
+    context.user_data['config_name_for_operator_peer'] = config_name
+    
+    await query.edit_message_text(
+        f"👷 *Crear Peer Temporal* ({timestamp})\n\n"
+        f"*Configuración:* {config_name}\n\n"
+        f"Envía el *nombre* para el nuevo peer:\n\n"
+        f"*Requisitos:*\n"
+        f"• Solo letras, números, guiones y guiones bajos\n"
+        f"• Máximo 32 caracteres\n"
+        f"• Ejemplo: `prueba-01`, `cliente-temporal`, `test-24h`\n\n"
+        f"Envía el nombre ahora o escribe */cancel* para cancelar.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Cancelar", callback_data="operator_main_menu")]
+        ]),
+        parse_mode="Markdown"
+    )
+async def handle_operators_detailed(query, context: CallbackContext):
+    """Muestra información detallada de todos los peers de operadores"""
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.edit_message_text(
+            "❌ *Acceso restringido*\n\n"
+            "Esta función solo está disponible para administradores.",
+            reply_markup=main_menu(is_admin(user_id), is_operator(user_id)),
+            parse_mode="Markdown"
+        )
+        return
+    
+    await query.edit_message_text("📋 Obteniendo información detallada de operadores...")
+    
+    # Obtener información de todos los operadores
+    operator_users = {uid: info for uid, info in ALLOWED_USERS.items() 
+                     if info.get('role') == ROLE_OPERATOR}
+    
+    if not operator_users:
+        await query.edit_message_text(
+            "ℹ️ No hay operadores registrados en el sistema.",
+            reply_markup=refresh_button("operators_list"),
+            parse_mode="Markdown"
+        )
+        return
+    
+    message_lines = ["📋 **Información Detallada de Operadores**\n"]
+    
+    all_peers = []
+    
+    for uid, user_info in operator_users.items():
+        user_name = user_info.get('name', f'ID: {uid}')
+        user_peers = operators_db.get_user_peers(uid)
+        
+        message_lines.append(f"\n**{user_name}** (ID: `{uid}`)")
+        message_lines.append(f"Total peers: {len(user_peers)}")
+        
+        if user_peers:
+            # Ordenar por fecha descendente
+            user_peers.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+            
+            for i, peer in enumerate(user_peers[:5], 1):  # Mostrar máximo 5 peers por operador
+                peer_name = peer.get('peer_name', 'Sin nombre')
+                config_name = peer.get('config_name', 'N/A')
+                created_at = peer.get('created_at', '')
+                public_key = peer.get('public_key', '')
+                public_key_short = public_key[:20] + '...' if public_key else 'N/A'
+                endpoint = peer.get('endpoint', 'N/A')
+                
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(created_at)
+                    created_str = dt.strftime("%d/%m/%Y %H:%M")
+                except:
+                    created_str = "Fecha desconocida"
+                
+                message_lines.append(f"  {i}. **{peer_name}**")
+                message_lines.append(f"     📅 Creado: {created_str}")
+                message_lines.append(f"     🔧 Config: {config_name}")
+                message_lines.append(f"     🌐 Endpoint: `{endpoint}`")
+                message_lines.append(f"     🔑 Clave: `{public_key_short}`")
+            
+            if len(user_peers) > 5:
+                message_lines.append(f"  ... y {len(user_peers) - 5} más")
+        
+        all_peers.extend(user_peers)
+    
+    # Resumen
+    message_lines.append(f"\n📊 **Resumen Total**")
+    message_lines.append(f"• Operadores activos: {len(operator_users)}")
+    message_lines.append(f"• Total peers creados: {len(all_peers)}")
+    
+    # Encontrar el peer más reciente
+    if all_peers:
+        all_peers.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        latest_peer = all_peers[0]
+        latest_peer_name = latest_peer.get('peer_name', 'N/A')
+        
+        # Buscar el operador que creó este peer
+        latest_operator_id = 'Desconocido'
+        for uid in operator_users:
+            user_peers = operators_db.get_user_peers(uid)
+            for peer in user_peers:
+                if peer.get('public_key') == latest_peer.get('public_key'):
+                    latest_operator_id = uid
+                    break
+        
+        try:
+            from datetime import datetime
+            latest_date = datetime.fromisoformat(latest_peer.get('created_at', ''))
+            latest_date_str = latest_date.strftime("%d/%m/%Y %H:%M")
+        except:
+            latest_date_str = "Fecha desconocida"
+        
+        message_lines.append(f"• Último peer creado: {latest_peer_name} por {latest_operator_id} ({latest_date_str})")
+    
+    message = "\n".join(message_lines)
+    
+    # Dividir si es muy largo
+    if len(message) > 4000:
+        # Enviar en partes
+        parts = [message[i:i+4000] for i in range(0, len(message), 4000)]
+        
+        for i, part in enumerate(parts):
+            if i == 0:
+                await query.edit_message_text(
+                    part,
+                    parse_mode="Markdown"
+                )
+            else:
+                await query.message.reply_text(
+                    part,
+                    parse_mode="Markdown"
+                )
+        
+        # Agregar teclado al último mensaje
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Volver", callback_data="operators_list")],
+            [InlineKeyboardButton("🏠 Menú Principal", callback_data="main_menu")]
+        ]
+        
+        await query.message.reply_text(
+            "📋 Fin del informe detallado.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+    else:
+        # Enviar mensaje completo
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Volver", callback_data="operators_list")],
+            [InlineKeyboardButton("🏠 Menú Principal", callback_data="main_menu")]
+        ]
+        
+        await query.edit_message_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
         )

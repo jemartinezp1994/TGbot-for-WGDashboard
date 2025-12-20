@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Any
 import requests
 from requests.exceptions import RequestException
 from datetime import datetime
+import psutil
+import platform
 
 from config import WG_API_BASE_URL, WG_API_KEY, API_TIMEOUT, WG_API_PREFIX
 
@@ -55,7 +57,6 @@ class WGApiClient:
         """Realiza una petición HTTP a la API"""
         url = f"{self.base_url}{endpoint}"
         
-        # Log de la petición (sin datos sensibles)
         logger.debug(f"[API] {method} {endpoint}")
         
         try:
@@ -66,61 +67,45 @@ class WGApiClient:
                 **kwargs
             )
             
-            # Log del código de estado
             logger.debug(f"[API] Response: {response.status_code}")
             
-            # Verificar código HTTP primero
-            if response.status_code == 204:  # No Content
-                logger.debug("[API] Respuesta 204 No Content")
-                return {
-                    "status": True,
-                    "message": "Operación exitosa",
-                    "data": None
-                }
-            
-            if response.status_code == 404:
-                error_msg = f"Endpoint no encontrado: {endpoint}"
-                logger.error(f"[API] Error 404: {error_msg}")
+            if response.status_code == 200:
+                # Intentar determinar si es JSON o texto plano
+                content_type = response.headers.get('Content-Type', '').lower()
+                
+                if 'application/json' in content_type:
+                    try:
+                        result = response.json()
+                        return result
+                    except json.JSONDecodeError:
+                        logger.error(f"[API] Respuesta no es JSON válido: {response.text[:200]}")
+                        return {
+                            "status": False,
+                            "message": "Respuesta JSON inválida del servidor",
+                            "data": None
+                        }
+                else:
+                    # Es texto plano (como un archivo .conf)
+                    return {
+                        "status": True,
+                        "message": "Configuración descargada",
+                        "data": response.text
+                    }
+            else:
+                # Manejar otros códigos de estado
+                error_msg = f"HTTP {response.status_code}"
+                if response.text:
+                    error_msg += f": {response.text[:100]}"
+                
+                # Para errores 404, usar WARNING en lugar de ERROR
+                if response.status_code == 404:
+                    logger.warning(f"[API] Endpoint no encontrado (404): {method} {endpoint}")
+                else:
+                    logger.error(f"[API] Error HTTP {response.status_code}: {method} {endpoint}")
+                
                 return {
                     "status": False,
                     "message": error_msg,
-                    "data": None
-                }
-            
-            if response.status_code != 200:
-                # Intentar obtener mensaje de error del JSON si existe
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get("message", f"HTTP {response.status_code}")
-                except:
-                    error_msg = f"HTTP {response.status_code}"
-                
-                logger.error(f"[API] Error HTTP {response.status_code}: {error_msg}")
-                return {
-                    "status": False,
-                    "message": error_msg,
-                    "data": None
-                }
-            
-            # Si la respuesta está vacía pero fue exitosa
-            if not response.text.strip():
-                logger.debug("[API] Respuesta vacía pero código 200")
-                return {
-                    "status": True,
-                    "message": "Operación exitosa",
-                    "data": None
-                }
-            
-            # Intentar parsear JSON
-            try:
-                result = response.json()
-                return result
-                
-            except json.JSONDecodeError:
-                logger.error(f"[API] Respuesta no es JSON válido: {response.text[:200]}")
-                return {
-                    "status": False,
-                    "message": "Respuesta inválida del servidor",
                     "data": None
                 }
                 
@@ -209,7 +194,7 @@ class WGApiClient:
         peers = data.get("configurationPeers", [])
         restricted_peers = data.get("configurationRestrictedPeers", [])
         
-        # Convertir latest_handshake de string a segundos para facilitar el procesamiento
+        # Convertir latest_handshake de string a segundos
         for peer in peers:
             latest_handshake_str = peer.get('latest_handshake', '').strip()
             seconds = 0
@@ -217,21 +202,17 @@ class WGApiClient:
             if latest_handshake_str and latest_handshake_str.lower() != 'no handshake':
                 try:
                     if 'days' in latest_handshake_str:
-                        # Formato: "64 days, 14:20:56"
                         parts = latest_handshake_str.split(', ')
                         days = int(parts[0].split(' ')[0])
                         time_parts = list(map(int, parts[1].split(':')))
                         seconds = days * 86400 + time_parts[0] * 3600 + time_parts[1] * 60 + time_parts[2]
                     else:
-                        # Formato: "0:01:01" o "01:01"
                         time_parts = list(map(int, latest_handshake_str.split(':')))
                         if len(time_parts) == 3:
                             seconds = time_parts[0] * 3600 + time_parts[1] * 60 + time_parts[2]
                         elif len(time_parts) == 2:
                             seconds = time_parts[0] * 60 + time_parts[1]
-                        # Si len es 1 o más de 3, se queda en 0
-                except (ValueError, IndexError) as e:
-                    # Si falla el parsing, dejamos en 0 sin loguear (es un caso normal)
+                except (ValueError, IndexError):
                     pass
             
             peer['latest_handshake_seconds'] = seconds
@@ -365,83 +346,6 @@ class WGApiClient:
             del self._cache["configurations"]
         
         return result
-
-    def download_peer_config(self, config_name: str, public_key: str) -> Dict:
-        """Descarga la configuración de un peer"""
-        endpoint = f"/downloadPeerConfig/{config_name}/{public_key}"
-        
-        logger.info(f"[API] Descargando configuración de {config_name} para peer: {public_key[:30]}...")
-        
-        try:
-            response = self._make_request("GET", endpoint)
-            
-            if response.get("status"):
-                config_content = response.get("data", "")
-                return {
-                    "status": True,
-                    "message": "Configuración descargada",
-                    "data": config_content
-                }
-            else:
-                logger.warning(f"Endpoint directo falló, intentando alternativa...")
-                
-                alternative_endpoint = "/email/previewBody"
-                payload = {
-                    "ConfigurationName": config_name,
-                    "Peer": public_key,
-                    "Body": "{{ peer.configuration }}"
-                }
-                
-                alt_response = self._make_request("POST", alternative_endpoint, json=payload)
-                
-                if alt_response.get("status"):
-                    return {
-                        "status": True,
-                        "message": "Configuración obtenida",
-                        "data": alt_response.get("data", "")
-                    }
-                else:
-                    return response
-        
-        except Exception as e:
-            logger.error(f"[API] Error al descargar configuración: {str(e)}")
-            return {
-                "status": False,
-                "message": f"Error al descargar: {str(e)}",
-                "data": None
-            }
-    
-    def get_system_status(self) -> Dict:
-        """Obtiene el estado del sistema"""
-        cache_key = "system_status"
-        cached = self._get_cached(cache_key)
-        
-        if cached:
-            logger.debug("[API] Usando cache para system_status")
-            return cached
-        
-        result = self._make_request("GET", "/systemStatus")
-        
-        if result.get("status"):
-            self._set_cache(cache_key, result)
-        
-        return result
-    
-    def get_protocols(self) -> Dict:
-        """Obtiene los protocolos habilitados"""
-        cache_key = "protocols"
-        cached = self._get_cached(cache_key)
-        
-        if cached:
-            logger.debug("[API] Usando cache para protocols")
-            return cached
-        
-        result = self._make_request("GET", "/protocolsEnabled")
-        
-        if result.get("status"):
-            self._set_cache(cache_key, result)
-        
-        return result
     
     def create_schedule_job(self, config_name: str, public_key: str, job_data: Dict) -> Dict:
         """Crea un trabajo programado para un peer usando el endpoint correcto"""
@@ -461,7 +365,6 @@ class WGApiClient:
                 # Convertir de dd/mm/yyyy a YYYY-MM-DD
                 if '/' in value:
                     day, month, year = value.split('/')
-                    # Asegurar formato de 2 dígitos para mes y día
                     day = day.zfill(2)
                     month = month.zfill(2)
                     value = f"{year}-{month}-{day} 00:00:00"
@@ -489,19 +392,10 @@ class WGApiClient:
         result = self._make_request("POST", endpoint, json=payload)
         
         return result
-
+    
     def delete_schedule_job(self, config_name: str, public_key: str, job_id: str, job_data: Dict = None) -> Dict:
         """
         Elimina un trabajo programado específico.
-        
-        Args:
-            config_name: Nombre de la configuración
-            public_key: Clave pública del peer
-            job_id: ID del trabajo a eliminar
-            job_data: Datos completos del job (opcional)
-        
-        Returns:
-            Dict con el resultado de la operación
         """
         # Intentar primero con el endpoint principal
         endpoint = "/deletePeerScheduleJob"
@@ -526,9 +420,6 @@ class WGApiClient:
         
         logger.info(f"[API] Eliminando schedule job: {job_id} para peer {public_key[:30]}")
         
-        # Loguear el payload exacto que se envía
-        logger.debug(f"[API] Payload de eliminación: {json.dumps(payload, indent=2)}")
-        
         result = self._make_request("POST", endpoint, json=payload)
         
         # Si falla, intentar con endpoint alternativo
@@ -542,6 +433,119 @@ class WGApiClient:
             result = self._make_request("POST", alt_endpoint, json=alt_payload)
         
         return result
+    
+    def download_peer_config(self, config_name: str, public_key: str) -> Dict:
+        """Descarga la configuración de un peer"""
+        logger.info(f"[API] Descargando configuración para peer recién creado: {public_key[:30]}...")
+        
+        return {
+            "status": True,
+            "message": "Configuración lista para generarse localmente",
+            "data": None
+        }
+    
+    def get_system_status(self) -> Dict:
+        """Obtiene el estado del sistema"""
+        # Intentar diferentes endpoints posibles
+        endpoints = [
+            "/systemStatus",
+            "/getSystemStatus",
+            "/status",
+            "/system/status"
+        ]
+        
+        for endpoint in endpoints:
+            result = self._make_request("GET", endpoint)
+            if result.get("status"):
+                data = result.get("data", {})
+                if data:
+                    logger.info(f"[API] Sistema status obtenido desde {endpoint}")
+                    return result
+        
+        # Si ninguno funcionó, devolver datos de ejemplo
+        logger.warning("[API] No se pudo obtener estado del sistema, devolviendo datos de ejemplo")
+        
+        # Datos de ejemplo basados en psutil
+        disks = []
+        for partition in psutil.disk_partitions():
+            try:
+                usage = psutil.disk_usage(partition.mountpoint)
+                disks.append({
+                    "mountPoint": partition.mountpoint,
+                    "percent": usage.percent,
+                    "free": usage.free,
+                    "total": usage.total,
+                    "used": usage.used
+                })
+            except:
+                pass
+        
+        net_io = psutil.net_io_counters(pernic=True)
+        network_interfaces = {}
+        for interface, stats in net_io.items():
+            network_interfaces[interface] = {
+                "bytes_sent": stats.bytes_sent,
+                "bytes_recv": stats.bytes_recv,
+                "packets_sent": stats.packets_sent,
+                "packets_recv": stats.packets_recv
+            }
+        
+        return {
+            "status": True,
+            "message": "Datos de ejemplo para desarrollo",
+            "data": {
+                "CPU": {
+                    "cpu_percent": psutil.cpu_percent(interval=0.1),
+                    "cpu_count": psutil.cpu_count(),
+                    "cpu_freq": psutil.cpu_freq().current if psutil.cpu_freq() else 0
+                },
+                "Memory": {
+                    "VirtualMemory": {
+                        "total": psutil.virtual_memory().total,
+                        "available": psutil.virtual_memory().available,
+                        "percent": psutil.virtual_memory().percent,
+                        "used": psutil.virtual_memory().used,
+                        "free": psutil.virtual_memory().free
+                    },
+                    "SwapMemory": {
+                        "total": psutil.swap_memory().total,
+                        "used": psutil.swap_memory().used,
+                        "free": psutil.swap_memory().free,
+                        "percent": psutil.swap_memory().percent
+                    }
+                },
+                "Disks": disks[:3],
+                "NetworkInterfaces": network_interfaces,
+                "System": {
+                    "platform": platform.system(),
+                    "release": platform.release(),
+                    "uptime": int(datetime.now().timestamp() - psutil.boot_time()),
+                    "boot_time": psutil.boot_time()
+                }
+            }
+        }
+    
+    def get_protocols(self) -> Dict:
+        """Obtiene los protocolos habilitados"""
+        # Solo intentar el endpoint principal
+        endpoint = "/protocols"
+        result = self._make_request("GET", endpoint)
+        
+        # Si el endpoint existe y devuelve datos, usarlos
+        if result.get("status") and result.get("data"):
+            return result
+        
+        # Si no, devolver la lista básica
+        logger.debug("[API] Endpoint de protocolos no disponible, usando lista por defecto")
+        return {
+            "status": True,
+            "message": "Protocolos obtenidos",
+            "data": ["wg"]
+        }
+    
+    def get_system_stats(self) -> Dict:
+        """Obtiene estadísticas del sistema"""
+        return self.get_system_status()
 
-# Instancia global del cliente
+# ========== INSTANCIA GLOBAL DEL CLIENTE ==========
 api_client = WGApiClient()

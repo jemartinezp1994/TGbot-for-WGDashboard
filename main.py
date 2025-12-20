@@ -61,8 +61,31 @@ def setup_handlers(application):
     # Comandos principales
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("configs", configs_command))
+    
+    # Comandos solo para administradores
+    from utils import is_admin
+    async def stats_command_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not is_admin(update.effective_user.id):
+            await update.message.reply_text(
+                "❌ *Acceso restringido*\n\n"
+                "Este comando solo está disponible para administradores.",
+                parse_mode="Markdown"
+            )
+            return
+        await stats_command(update, context)
+    
+    async def configs_command_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not is_admin(update.effective_user.id):
+            await update.message.reply_text(
+                "❌ *Acceso restringido*\n\n"
+                "Este comando solo está disponible para administradores.",
+                parse_mode="Markdown"
+            )
+            return
+        await configs_command(update, context)
+    
+    application.add_handler(CommandHandler("stats", stats_command_admin))
+    application.add_handler(CommandHandler("configs", configs_command_admin))
     
     # Callbacks (botones inline)
     application.add_handler(CallbackQueryHandler(callback_handler))

@@ -9,7 +9,8 @@ from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from config import ALLOWED_USERS, MAX_PEERS_DISPLAY
+from config import ALLOWED_USERS, MAX_PEERS_DISPLAY, ROLE_ADMIN, ROLE_OPERATOR
+from operators import operators_db
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +29,43 @@ def is_allowed(update: Update) -> bool:
     
     return is_allowed_user
 
-def get_user_name(update: Update) -> str:
-    """Obtiene el nombre del usuario para logging"""
-    user = update.effective_user
+def get_user_role(user_id: int) -> Optional[str]:
+    """Obtiene el rol del usuario"""
+    user_data = ALLOWED_USERS.get(user_id)
+    if user_data:
+        return user_data.get("role")
+    return None
+
+def is_admin(user_id: int) -> bool:
+    """Verifica si el usuario es administrador"""
+    return get_user_role(user_id) == ROLE_ADMIN
+
+def is_operator(user_id: int) -> bool:
+    """Verifica si el usuario es operador"""
+    return get_user_role(user_id) == ROLE_OPERATOR
+
+def can_operator_create_peer(user_id: int) -> tuple:
+    """
+    Verifica si un operador puede crear un peer.
+    
+    Returns:
+        (bool, str, datetime) - (puede_crear, mensaje_error, proximo_permiso)
+    """
+    return operators_db.can_create_peer(user_id)
+
+def get_user_name(update_or_user) -> str:
+    """Obtiene el nombre del usuario para logging - Ahora acepta Update o User"""
+    from telegram import Update, User, CallbackQuery
+    
+    if isinstance(update_or_user, Update):
+        user = update_or_user.effective_user
+    elif isinstance(update_or_user, CallbackQuery):
+        user = update_or_user.from_user
+    elif isinstance(update_or_user, User):
+        user = update_or_user
+    else:
+        return "Desconocido"
+    
     if not user:
         return "Desconocido"
     
@@ -94,6 +129,19 @@ def format_time_ago(seconds: int) -> str:
     else:
         days = seconds // 86400
         return f"hace {int(days)} días"
+
+def format_time_remaining(seconds: int) -> str:
+    """Formatea segundos restantes en formato legible"""
+    if seconds <= 0:
+        return "Ahora mismo"
+    
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    else:
+        return f"{minutes}m"
 
 def format_peer_info(peer: Dict) -> str:
     """Formatea la información de un peer"""
@@ -291,13 +339,28 @@ def log_command(update: Update, command: str):
     """Registra el uso de un comando"""
     user_id = update.effective_user.id
     username = get_user_name(update)
-    logger.info(f"Comando '{command}' ejecutado por {username} ({user_id})")
+    role = get_user_role(user_id) or "sin_rol"
+    logger.info(f"Comando '{command}' ejecutado por {username} ({user_id}) - Rol: {role}")
+
+def log_command_with_role(update: Update, command: str):
+    """Registra el uso de un comando incluyendo rol"""
+    user_id = update.effective_user.id
+    username = get_user_name(update)
+    role = get_user_role(user_id) or "sin_rol"
+    logger.info(f"Comando '{command}' por {username} ({user_id}) - Rol: {role}")
 
 def log_callback(update: Update, callback_data: str):
     """Registra el uso de un callback"""
     user_id = update.effective_user.id
     username = get_user_name(update)
     logger.info(f"Callback '{callback_data}' por {username} ({user_id})")
+
+def log_callback_with_role(update: Update, callback_data: str):
+    """Registra el uso de un callback incluyendo rol"""
+    user_id = update.effective_user.id
+    username = get_user_name(update)
+    role = get_user_role(user_id) or "sin_rol"
+    logger.info(f"Callback '{callback_data}' por {username} ({user_id}) - Rol: {role}")
 
 def log_error(update: Update, error: Exception, context: str = ""):
     """Registra un error con contexto"""

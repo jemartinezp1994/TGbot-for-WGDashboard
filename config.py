@@ -3,7 +3,7 @@ Configuración centralizada del bot WGDashboard
 """
 
 import os
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 
 # Cargar variables de entorno
@@ -21,12 +21,22 @@ API_TIMEOUT = int(os.getenv("API_TIMEOUT", "10"))
 WG_API_PREFIX = os.getenv("WG_API_PREFIX", "")
 
 # ================= SEGURIDAD ================= #
-# Diccionario de usuarios permitidos {user_id: "nombre"}
-ALLOWED_USERS: Dict[int, str] = {
-    762494594: "Admin Principal",
+# Roles
+ROLE_ADMIN = "admin"
+ROLE_OPERATOR = "operator"
+
+# Diccionario de usuarios permitidos {user_id: {"name": "nombre", "role": "admin|operator"}}
+ALLOWED_USERS: Dict[int, Dict] = {
+    762494594: {"name": "Owner", "role": ROLE_ADMIN},
     # Agrega más usuarios aquí:
-    # 987654321: "Otro Admin",
+    7645879687: {"name": "Operador 1", "role": ROLE_OPERATOR},
+    7287104338: {"name": "Operador 2", "role": ROLE_OPERATOR},
+    # 987654321: {"name": "Admin 2", "role": ROLE_ADMIN},
 }
+
+# ================= RUTAS ================= #
+DATA_DIR = "data"
+OPERATORS_DB = os.path.join(DATA_DIR, "operator_peers.json")
 
 # ================= LOGGING ================= #
 LOG_FILE = os.getenv("LOG_FILE", "wg_bot.log")
@@ -37,6 +47,11 @@ LOG_BACKUP_COUNT = 5
 # ================= INTERFAZ ================= #
 MAX_PEERS_DISPLAY = int(os.getenv("MAX_PEERS_DISPLAY", "10"))
 ITEMS_PER_PAGE = 8
+
+# ================= LÍMITES OPERADORES ================= #
+OPERATOR_LIMIT_HOURS = 24  # Horas entre creación de peers
+OPERATOR_DATA_LIMIT_GB = 1  # Límite de datos en GB
+OPERATOR_TIME_LIMIT_HOURS = 24  # Límite de tiempo en horas
 
 # ================= VALIDACIÓN ================= #
 def validate_config():
@@ -54,6 +69,12 @@ def validate_config():
     
     if not ALLOWED_USERS:
         errors.append("ALLOWED_USERS está vacío")
+    
+    # Crear directorio de datos si no existe
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except Exception as e:
+        errors.append(f"No se pudo crear directorio data: {str(e)}")
     
     return errors
 
