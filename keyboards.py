@@ -160,17 +160,55 @@ def operator_choose_config_menu(configs: List[Dict]) -> InlineKeyboardMarkup:
 def config_menu(config_name: str) -> InlineKeyboardMarkup:
     """Menú para una configuración específica"""
     keyboard = [
-        # Botón ELIMINADO: [InlineKeyboardButton("📥 Descargar Peers", callback_data=f"peers:{config_name}")],
-        # Cambio: Llamar directamente a la vista paginada en lugar de al menú intermedio
         [InlineKeyboardButton("📋 Detalles Peers", callback_data=f"peers_detailed_paginated:{config_name}:0")],
         [InlineKeyboardButton("🗑 Eliminar Peer", callback_data=f"delete_peer:{config_name}")],
         [InlineKeyboardButton("➕ Agregar Peer", callback_data=f"add_peer:{config_name}")],
         [InlineKeyboardButton("⏰ Schedule Jobs", callback_data=f"schedule_jobs_menu:{config_name}")],
-        # NUEVO: Botón de restricciones
         [InlineKeyboardButton("🚫 Restricciones", callback_data=f"restrictions:{config_name}")],
+        [InlineKeyboardButton("🧹 Limpiar Tráfico", callback_data=f"reset_traffic:{config_name}:0")],  # NUEVO BOTÓN
         [InlineKeyboardButton("🔄 Actualizar", callback_data=f"cfg:{config_name}")],
         [InlineKeyboardButton("⬅️ Volver", callback_data="configs")]
     ]
+    return InlineKeyboardMarkup(keyboard)
+
+def paginated_reset_traffic_menu(peers: List[Dict], config_name: str, page: int) -> InlineKeyboardMarkup:
+    """Crea un teclado paginado para seleccionar peer para resetear tráfico"""
+    keyboard = []
+    start_idx = page * 6
+    end_idx = start_idx + 6
+    page_peers = peers[start_idx:end_idx]
+    
+    for i, peer in enumerate(page_peers, start_idx):
+        peer_name = peer.get('name', f'Peer {i+1}')
+        button_text = f"🧹 {peer_name[:15]}"
+        keyboard.append([
+            InlineKeyboardButton(
+                button_text,
+                callback_data=f"reset_traffic_confirm:{config_name}:{i}:{page}"
+            )
+        ])
+    
+    # Botones de navegación
+    nav_buttons = []
+    
+    if page > 0:
+        nav_buttons.append(
+            InlineKeyboardButton("◀️", callback_data=f"reset_traffic:{config_name}:{page-1}")
+        )
+    
+    if end_idx < len(peers):
+        nav_buttons.append(
+            InlineKeyboardButton("▶️", callback_data=f"reset_traffic:{config_name}:{page+1}")
+        )
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    # Botones de acción
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Volver", callback_data=f"cfg:{config_name}")
+    ])
+    
     return InlineKeyboardMarkup(keyboard)
 
 def restrictions_menu(config_name: str) -> InlineKeyboardMarkup:
@@ -356,7 +394,7 @@ def peers_selection_menu(peers: List[Dict], config_name: str, action: str, page:
     
     return InlineKeyboardMarkup(keyboard)
 
-def confirmation_menu(config_name: str, peer_identifier: str, action_type: str, action_text: str = None) -> InlineKeyboardMarkup:
+def confirmation_menu(config_name: str, peer_identifier: str, action_type: str, action_text: str = None, extra_data: str = None) -> InlineKeyboardMarkup:
     """Crea un menú de confirmación para acciones críticas"""
     # Si no se proporciona action_text, usar un valor por defecto basado en action_type
     if action_text is None:
@@ -364,18 +402,25 @@ def confirmation_menu(config_name: str, peer_identifier: str, action_type: str, 
             "delete_peer": "Eliminar",
             "unrestrict": "Quitar Restricción",
             "restrict": "Restringir",
-            "delete_schedule_job": "Eliminar Job"
+            "delete_schedule_job": "Eliminar Job",
+            "reset_traffic": "Limpiar Tráfico"
         }
         action_text = action_text_map.get(action_type, "Confirmar")
     
     # Codificar el identificador si es necesario
     safe_identifier = safe_callback_data(peer_identifier)
     
+    # Para reset_traffic, necesitamos pasar también la página
+    if action_type == "reset_traffic" and extra_data:
+        callback_data = f"{action_type}_execute:{config_name}:{safe_identifier}:{extra_data}"
+    else:
+        callback_data = f"{action_type}_execute:{config_name}:{safe_identifier}"
+    
     keyboard = [
         [
             InlineKeyboardButton(
                 f"✅ Sí, {action_text.lower()}",
-                callback_data=f"{action_type}_execute:{config_name}:{safe_identifier}"
+                callback_data=callback_data
             ),
             InlineKeyboardButton(
                 f"❌ Cancelar",

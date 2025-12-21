@@ -6,6 +6,7 @@ import logging
 import json
 import datetime
 import secrets
+import html
 import base64
 import ipaddress
 import re
@@ -31,7 +32,8 @@ from wg_api import api_client
 from keyboards import (
     main_menu, config_menu, paginated_configs_menu, restrictions_menu,
     paginated_restricted_peers_menu, paginated_unrestricted_peers_menu,
-    confirmation_menu, back_button, refresh_button, operator_main_menu,
+    paginated_reset_traffic_menu, confirmation_menu, back_button,
+    refresh_button, operator_main_menu,
     InlineKeyboardMarkup, decode_callback_data
 )
 from utils import (
@@ -482,7 +484,8 @@ async def callback_handler(update: Update, context: CallbackContext):
         "schedule_jobs_menu:", "schedule_job_peer:", "add_schedule_job_data:", "add_schedule_job_date:",
         "delete_schedule_job_confirm:", "delete_schedule_job_execute:",
         "restrictions:", "restricted_peers:", "restrict_peer_menu:",
-        "unrestrict:", "restrict:", "page_res:", "page_unres:"
+        "unrestrict:", "restrict:", "page_res:", "page_unres:",
+        "reset_traffic:", "reset_traffic_confirm:", "reset_traffic_execute:"  # AGREGADOS
     ]
     
     # Verificar si es operador intentando acceder a funciones de admin
@@ -512,8 +515,6 @@ async def callback_handler(update: Update, context: CallbackContext):
         elif callback_data == "operator_create_peer_menu":
             await handle_operator_create_peer(query, context)
         
-        
-        
         # ================= MANEJO DE ACCIONES PRINCIPALES ================= #
         elif callback_data == "handshake":
             await handle_handshake(query)
@@ -535,6 +536,7 @@ async def callback_handler(update: Update, context: CallbackContext):
         
         elif callback_data == "help":
             await handle_help(query)
+        
         elif callback_data == "operators_list":
             await handle_operators_list(query, context)
 
@@ -589,6 +591,30 @@ async def callback_handler(update: Update, context: CallbackContext):
                 config_name = parts[1]
                 page = int(parts[2])
                 await handle_unrestricted_peers_list(query, context, config_name, page)
+        
+        # ================= MANEJO DE LIMPIAR TRÁFICO ================= #
+        elif callback_data.startswith("reset_traffic:"):
+            parts = callback_data.split(":")
+            if len(parts) >= 3:
+                config_name = parts[1]
+                page = int(parts[2])
+                await handle_reset_traffic_menu(query, context, config_name, page)
+        
+        elif callback_data.startswith("reset_traffic_confirm:"):
+            parts = callback_data.split(":")
+            if len(parts) >= 4:
+                config_name = parts[1]
+                peer_index = int(parts[2])
+                page = int(parts[3])
+                await handle_reset_traffic_confirm(query, config_name, peer_index, page)
+
+        elif callback_data.startswith("reset_traffic_final:"):
+            parts = callback_data.split(":")
+            if len(parts) >= 4:
+                config_name = parts[1]
+                peer_index = parts[2]
+                page = parts[3]
+                await handle_reset_traffic_final(query, context, config_name, peer_index, page)
         
         # ================= MANEJO DE PAGINACIÓN ================= #
         elif callback_data.startswith("page_configs:"):
@@ -924,7 +950,7 @@ async def handle_unrestricted_peers_list(query, context: CallbackContext, config
     )
 
 async def handle_unrestrict_simple(query, context: CallbackContext, config_name: str, peer_index: int):
-    """Quitar restricción de forma simplificada"""
+    """Quitar restricción de forma simplificada - VERSIÓN SEGURA CON HTML"""
     await query.edit_message_text(f"🔓 Quitando restricción...")
     
     # Obtener peers del contexto
@@ -951,25 +977,31 @@ async def handle_unrestrict_simple(query, context: CallbackContext, config_name:
     # Llamar a la API
     result = api_client.allow_access_peer(config_name, public_key)
     
+    # Escapar caracteres HTML
+    peer_name_safe = html.escape(peer_name)
+    config_name_safe = html.escape(config_name)
+    
     if result.get("status"):
         await query.edit_message_text(
-            f"✅ *Restricción quitada*\n\nPeer: {peer_name}\nAhora puede conectarse.",
+            f"✅ <b>Restricción quitada</b>\n\n"
+            f"Peer: {peer_name_safe}\n"
+            f"Ahora puede conectarse.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Actualizar lista", callback_data=f"restricted_peers:{config_name}:0")],
                 [InlineKeyboardButton("⬅️ Volver", callback_data=f"restrictions:{config_name}")]
             ]),
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
     else:
-        error_msg = result.get('message', 'Error desconocido')
+        error_msg = html.escape(result.get('message', 'Error desconocido'))
         await query.edit_message_text(
-            f"❌ *Error*\n\n{error_msg}",
+            f"❌ <b>Error</b>\n\n{error_msg}",
             reply_markup=back_button(f"restricted_peers:{config_name}:0"),
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
 
 async def handle_restrict_simple(query, context: CallbackContext, config_name: str, peer_index: int):
-    """Restringir peer de forma simplificada"""
+    """Restringir peer de forma simplificada - VERSIÓN SEGURA CON HTML"""
     await query.edit_message_text(f"🔒 Restringiendo peer...")
     
     # Obtener peers del contexto
@@ -996,21 +1028,27 @@ async def handle_restrict_simple(query, context: CallbackContext, config_name: s
     # Llamar a la API
     result = api_client.restrict_peer(config_name, public_key)
     
+    # Escapar caracteres HTML
+    peer_name_safe = html.escape(peer_name)
+    config_name_safe = html.escape(config_name)
+    
     if result.get("status"):
         await query.edit_message_text(
-            f"✅ *Peer restringido*\n\nPeer: {peer_name}\nYa no podrá conectarse.",
+            f"✅ <b>Peer restringido</b>\n\n"
+            f"Peer: {peer_name_safe}\n"
+            f"Ya no podrá conectarse.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Actualizar lista", callback_data=f"restrict_peer_menu:{config_name}:0")],
                 [InlineKeyboardButton("⬅️ Volver", callback_data=f"restrictions:{config_name}")]
             ]),
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
     else:
-        error_msg = result.get('message', 'Error desconocido')
+        error_msg = html.escape(result.get('message', 'Error desconocido'))
         await query.edit_message_text(
-            f"❌ *Error*\n\n{error_msg}",
+            f"❌ <b>Error</b>\n\n{error_msg}",
             reply_markup=back_button(f"restrict_peer_menu:{config_name}:0"),
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
 
 async def handle_unrestrict_confirm(query, context: CallbackContext, config_name: str, public_key_short: str, peer_index: str):
@@ -1097,6 +1135,282 @@ async def handle_unrestrict_execute(query, config_name: str, public_key: str):
             f"❌ *Error al quitar restricción*\n\n"
             f"*Error:* {error_msg}",
             reply_markup=back_button(f"restricted_peers:{config_name}:0"),
+            parse_mode="Markdown"
+        )
+
+# Agregar estas funciones nuevas:
+
+async def handle_reset_traffic_menu(query, context: CallbackContext, config_name: str, page: int = 0):
+    """Muestra el menú para seleccionar peer para resetear tráfico"""
+    await query.edit_message_text(f"🧹 Obteniendo peers de {config_name}...")
+    
+    result = api_client.get_peers(config_name)
+    
+    if not result.get("status"):
+        await query.edit_message_text(
+            f"❌ Error: {result.get('message', 'Error desconocido')}",
+            reply_markup=back_button(f"cfg:{config_name}")
+        )
+        return
+    
+    peers = result.get("data", [])
+    
+    if not peers:
+        await query.edit_message_text(
+            f"⚠️ No hay peers en {config_name}",
+            reply_markup=back_button(f"cfg:{config_name}")
+        )
+        return
+    
+    # Guardar en el contexto para uso posterior
+    context.user_data[f'reset_traffic_peers_{config_name}'] = peers
+    
+    total_peers = len(peers)
+    total_pages = (total_peers - 1) // 6 + 1
+    
+    if page >= total_pages:
+        page = total_pages - 1
+    
+    keyboard = paginated_reset_traffic_menu(peers, config_name, page)
+    
+    message = f"🧹 *Limpiar Tráfico - {config_name}*\n\n"
+    message += f"📊 Total peers: {total_peers}\n"
+    message += f"📄 Página {page + 1} de {total_pages}\n\n"
+    message += "Selecciona un peer para resetear su contador de datos:"
+    
+    await query.edit_message_text(
+        message,
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+async def handle_reset_traffic_confirm(query, config_name: str, peer_index: int, page: int):
+    """Muestra confirmación para resetear tráfico de un peer - VERSIÓN SEGURA CON HTML"""
+    # Obtener información del peer
+    result = api_client.get_peers(config_name)
+    if not result.get("status"):
+        await query.edit_message_text(
+            f"❌ Error: {result.get('message', 'Error desconocido')}",
+            reply_markup=back_button(f"reset_traffic:{config_name}:{page}")
+        )
+        return
+    
+    peers = result.get("data", [])
+    
+    if peer_index < 0 or peer_index >= len(peers):
+        await query.edit_message_text(
+            f"❌ Índice de peer inválido",
+            reply_markup=back_button(f"reset_traffic:{config_name}:{page}")
+        )
+        return
+    
+    peer = peers[peer_index]
+    peer_name = peer.get('name', 'Desconocido')
+    public_key = peer.get('id', '')
+    
+    if not public_key:
+        await query.edit_message_text(
+            f"❌ No se pudo obtener la clave pública del peer",
+            reply_markup=back_button(f"reset_traffic:{config_name}:{page}")
+        )
+        return
+    
+    # Obtener datos actuales del peer
+    total_receive = peer.get('total_receive', 0)  # MB
+    total_sent = peer.get('total_sent', 0)        # MB
+    
+    from utils import format_bytes_human
+    
+    # Escapar caracteres HTML para evitar problemas
+    peer_name_safe = html.escape(peer_name)
+    config_name_safe = html.escape(config_name)
+    public_key_short_safe = html.escape(public_key[:30] + "...")
+    
+    total_data = format_bytes_human(total_receive + total_sent)
+    
+    # Usar HTML para el formato (más robusto que Markdown)
+    message = f"⚠️ <b>Confirmar Limpiar Tráfico</b>\n\n"
+    message += f"¿Estás seguro de que deseas resetear el contador de datos de este peer?\n\n"
+    message += f"<b>Peer:</b> {peer_name_safe}\n"
+    message += f"<b>Configuración:</b> {config_name_safe}\n"
+    message += f"<b>Datos actuales:</b>\n"
+    message += f"  ⬇️ Recibido: {format_bytes_human(total_receive)}\n"
+    message += f"  ⬆️ Enviado: {format_bytes_human(total_sent)}\n"
+    message += f"  📊 Total: {total_data}\n\n"
+    message += f"<b>Clave pública:</b> <code>{public_key_short_safe}</code>\n\n"
+    message += "⚠️ <b>Esta acción reseteará el contador de datos del peer a cero.</b>"
+    
+    # Crear teclado directamente sin usar confirmation_menu
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "✅ Sí, limpiar tráfico",
+                callback_data=f"reset_traffic_final:{config_name}:{peer_index}:{page}"
+            ),
+            InlineKeyboardButton(
+                "❌ Cancelar",
+                callback_data=f"reset_traffic:{config_name}:{page}"
+            )
+        ]
+    ])
+    
+    await query.edit_message_text(
+        message,
+        reply_markup=keyboard,
+        parse_mode="HTML"  # CAMBIADO A HTML
+    )
+
+async def handle_reset_traffic_final(query, context: CallbackContext, config_name: str, peer_index: str, page: str):
+    """Ejecuta el reset del tráfico de un peer - VERSIÓN SEGURA CON HTML"""
+    try:
+        peer_idx = int(peer_index)
+        page_num = int(page)
+        
+        logger.info(f"Reset traffic - Config: {config_name}, Peer idx: {peer_idx}, Page: {page_num}")
+        
+        await query.edit_message_text(f"🧹 Reseteando contador de datos...")
+        
+        # Obtener información del peer para obtener su clave pública
+        result = api_client.get_peers(config_name)
+        if not result.get("status"):
+            await query.edit_message_text(
+                f"❌ Error: {html.escape(result.get('message', 'Error desconocido'))}",
+                reply_markup=back_button(f"reset_traffic:{config_name}:{page_num}")
+            )
+            return
+        
+        peers = result.get("data", [])
+        
+        if peer_idx < 0 or peer_idx >= len(peers):
+            await query.edit_message_text(
+                f"❌ Índice de peer inválido",
+                reply_markup=back_button(f"reset_traffic:{config_name}:{page_num}")
+            )
+            return
+        
+        peer = peers[peer_idx]
+        public_key = peer.get('id', '')
+        peer_name = peer.get('name', 'Desconocido')
+        
+        if not public_key:
+            await query.edit_message_text(
+                f"❌ No se pudo obtener la clave pública del peer",
+                reply_markup=back_button(f"reset_traffic:{config_name}:{page_num}")
+            )
+            return
+        
+        logger.info(f"Enviando petición a API: endpoint=/resetPeerData/{config_name}, public_key={public_key[:30]}...")
+        
+        # Llamar a la API para resetear datos
+        result = api_client.reset_peer_data(config_name, public_key)
+        
+        logger.info(f"Respuesta de API: status={result.get('status')}, message={result.get('message')}")
+        
+        if result.get("status"):
+            # Escapar caracteres HTML
+            peer_name_safe = html.escape(peer_name)
+            config_name_safe = html.escape(config_name)
+            
+            await query.edit_message_text(
+                f"✅ <b>Contador de datos reseteado</b>\n\n"
+                f"<b>Peer:</b> {peer_name_safe}\n"
+                f"<b>Configuración:</b> {config_name_safe}\n\n"
+                f"El contador de datos ha sido puesto a cero.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Ver lista actualizada", callback_data=f"reset_traffic:{config_name}:{page_num}")],
+                    [InlineKeyboardButton("⬅️ Volver a Configuración", callback_data=f"cfg:{config_name}")]
+                ]),
+                parse_mode="HTML"  # CAMBIADO A HTML
+            )
+        else:
+            error_msg = html.escape(result.get('message', 'Error desconocido'))
+            await query.edit_message_text(
+                f"❌ <b>Error al resetear datos</b>\n\n"
+                f"<b>Error:</b> {error_msg}\n\n"
+                f"<b>Endpoint usado:</b> /resetPeerData/{html.escape(config_name)}\n"
+                f"<b>Public key:</b> <code>{html.escape(public_key[:30])}...</code>",
+                reply_markup=back_button(f"reset_traffic:{config_name}:{page_num}"),
+                parse_mode="HTML"  # CAMBIADO A HTML
+            )
+    
+    except Exception as e:
+        logger.error(f"Error en reset_traffic_final: {str(e)}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ <b>Error interno al procesar la solicitud</b>\n\n"
+            f"<b>Error:</b> {html.escape(str(e))}",
+            reply_markup=back_button(f"cfg:{config_name}"),
+            parse_mode="HTML"  # CAMBIADO A HTML
+        )
+
+async def handle_reset_traffic_execute(query, context: CallbackContext, config_name: str, peer_index: str, page: str):
+    """Ejecuta el reset del tráfico de un peer"""
+    from keyboards import decode_callback_data
+    
+    logger.info(f"DEBUG - Reset traffic execute: config={config_name}, peer_index={peer_index}, page={page}")
+
+    # Decodificar el índice
+    try:
+        peer_idx = int(decode_callback_data(peer_index))
+        page_num = int(page)
+        logger.info(f"DEBUG - Decoded: peer_idx={peer_idx}, page_num={page_num}")
+    except Exception as e:
+        logger.error(f"Error decodificando datos: {str(e)}")
+        await query.edit_message_text(
+            f"❌ Error procesando los datos",
+            reply_markup=back_button(f"cfg:{config_name}")
+        )
+        return
+    
+    # Obtener información del peer para obtener su clave pública
+    result = api_client.get_peers(config_name)
+    if not result.get("status"):
+        await query.edit_message_text(
+            f"❌ Error: {result.get('message', 'Error desconocido')}",
+            reply_markup=back_button(f"reset_traffic:{config_name}:{page_num}")
+        )
+        return
+    
+    peers = result.get("data", [])
+    
+    if peer_idx < 0 or peer_idx >= len(peers):
+        await query.edit_message_text(
+            f"❌ Índice de peer inválido",
+            reply_markup=back_button(f"reset_traffic:{config_name}:{page_num}")
+        )
+        return
+    
+    peer = peers[peer_idx]
+    public_key = peer.get('id', '')
+    peer_name = peer.get('name', 'Desconocido')
+    
+    if not public_key:
+        await query.edit_message_text(
+            f"❌ No se pudo obtener la clave pública del peer",
+            reply_markup=back_button(f"reset_traffic:{config_name}:{page_num}")
+        )
+        return
+    
+    # Llamar a la API para resetear datos
+    result = api_client.reset_peer_data(config_name, public_key)
+    
+    if result.get("status"):
+        await query.edit_message_text(
+            f"✅ *Contador de datos reseteado*\n\n"
+            f"Peer: {peer_name}\n"
+            f"Configuración: {config_name}\n\n"
+            f"El contador de datos ha sido puesto a cero.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Ver lista actualizada", callback_data=f"reset_traffic:{config_name}:{page_num}")],
+                [InlineKeyboardButton("⬅️ Volver a Configuración", callback_data=f"cfg:{config_name}")]
+            ]),
+            parse_mode="Markdown"
+        )
+    else:
+        error_msg = result.get('message', 'Error desconocido')
+        await query.edit_message_text(
+            f"❌ *Error al resetear datos*\n\n"
+            f"*Error:* {error_msg}",
+            reply_markup=back_button(f"reset_traffic:{config_name}:{page_num}"),
             parse_mode="Markdown"
         )
 

@@ -57,7 +57,9 @@ class WGApiClient:
         """Realiza una petición HTTP a la API"""
         url = f"{self.base_url}{endpoint}"
         
-        logger.debug(f"[API] {method} {endpoint}")
+        logger.info(f"[API] {method} {url}")
+        if 'json' in kwargs:
+            logger.info(f"[API] JSON payload: {json.dumps(kwargs['json'], indent=2)}")
         
         try:
             response = self.session.request(
@@ -67,7 +69,7 @@ class WGApiClient:
                 **kwargs
             )
             
-            logger.debug(f"[API] Response: {response.status_code}")
+            logger.info(f"[API] Response: {response.status_code}")
             
             if response.status_code == 200:
                 # Intentar determinar si es JSON o texto plano
@@ -308,6 +310,25 @@ class WGApiClient:
         # Invalidar cache de configuraciones
         if "configurations" in self._cache:
             del self._cache["configurations"]
+        
+        return result
+    
+    def reset_peer_data(self, config_name: str, public_key: str) -> Dict:
+        """Resetea el contador de datos de un peer específico"""
+        endpoint = f"/resetPeerData/{config_name}"
+        payload = {
+            "id": public_key,
+            "type": "total"
+        }
+        
+        logger.info(f"[API] Reseteando datos del peer en {config_name}: {public_key[:30]}...")
+        logger.info(f"[API] Endpoint: {endpoint}")
+        logger.info(f"[API] Payload: {json.dumps(payload)}")
+        
+        result = self._make_request("POST", endpoint, json=payload)
+        
+        if result:
+            logger.info(f"[API] Resultado: status={result.get('status')}, message={result.get('message')}")
         
         return result
     

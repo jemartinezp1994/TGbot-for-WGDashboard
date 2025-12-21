@@ -366,3 +366,11 @@ def log_error(update: Update, error: Exception, context: str = ""):
     """Registra un error con contexto"""
     user_info = f"Usuario: {get_user_name(update)}" if update else "Sin usuario"
     logger.error(f"Error en {context}: {str(error)} | {user_info}", exc_info=True)
+
+def escape_markdown(text: str) -> str:
+    """Escapa caracteres especiales de Markdown"""
+    if not text:
+        return text
+    
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(['\\' + char if char in escape_chars else char for char in text])
