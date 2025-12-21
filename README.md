@@ -39,13 +39,8 @@ Servidor Linux recomendado Ubuntu 20.04 o superior
 
 Clonar el repositorio
 
-git clone https://github.com/tu-usuario/wgdashboard-telegram-bot.git  
+git clone https://github.com/jemartinezp1994/TGbot-for-WGDashboard.git  
 cd wgdashboard-telegram-bot  
-
-Crear entorno virtual opcional
-
-python3 -m venv venv  
-source venv/bin/activate  
 
 Instalar dependencias
 
@@ -55,10 +50,14 @@ pip install -r requirements.txt
 
 El bot utiliza variables de entorno. Crear un archivo .env en la raíz del proyecto
 
-TELEGRAM_BOT_TOKEN=TU_TOKEN_DE_TELEGRAM  
-WG_API_BASE_URL=http://localhost:10086/api  
-WG_API_USERNAME=admin  
-WG_API_PASSWORD=admin  
+TELEGRAM_BOT_TOKEN=
+WG_API_BASE_URL=https://url/api
+WG_API_KEY=
+WG_API_PREFIX=
+API_TIMEOUT=10
+LOG_FILE=wg_bot.log
+LOG_LEVEL=INFO
+MAX_PEERS_DISPLAY=10 
 
 Nunca subas el archivo .env a GitHub
 
