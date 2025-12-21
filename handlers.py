@@ -2094,13 +2094,21 @@ async def handle_add_peer(query, context: CallbackContext, config_name: str):
             return
     
     # Limpiar estado previo
-    for key in ['waiting_for_peer_name', 'config_name_for_peer', 'waiting_for_peer_data']:
+    for key in ['waiting_for_peer_name', 'config_name_for_peer', 'waiting_for_peer_data',
+                'waiting_for_admin_peer_name', 'config_name_for_admin_peer',
+                'waiting_for_operator_peer_name', 'config_name_for_operator_peer']:
         if key in context.user_data:
             del context.user_data[key]
     
     # Guardar en el contexto que estamos esperando un nombre para esta configuración
-    context.user_data['waiting_for_peer_name'] = True
-    context.user_data['config_name_for_peer'] = config_name
+    # Ahora tanto admin como operator usan el mismo flujo
+    if is_operator(user_id):
+        context.user_data['waiting_for_operator_peer_name'] = True
+        context.user_data['config_name_for_operator_peer'] = config_name
+    else:
+        # Admin también usa el mismo flujo que operator
+        context.user_data['waiting_for_operator_peer_name'] = True
+        context.user_data['config_name_for_operator_peer'] = config_name
     
     # Obtener información de la configuración para mostrar detalles
     result = api_client.get_configuration_detail(config_name)
@@ -3192,9 +3200,11 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Comando /cancel (mantener funcionalidad pero no mencionarlo en ayuda)
     if message_text.lower() == '/cancel':
-        # Limpiar estado de creación de peer para operador
-        if context.user_data.get('waiting_for_operator_peer_name', False):
-            for key in ['waiting_for_operator_peer_name', 'config_name_for_operator_peer']:
+        # Limpiar estado de creación de peer para operador/admin
+        if context.user_data.get('waiting_for_operator_peer_name', False) or \
+           context.user_data.get('waiting_for_operator_peer_endpoint', False):
+            for key in ['waiting_for_operator_peer_name', 'config_name_for_operator_peer',
+                       'operator_peer_name', 'waiting_for_operator_peer_endpoint']:
                 if key in context.user_data:
                     del context.user_data[key]
             
@@ -3692,6 +3702,7 @@ async def generate_peer_automatically(update: Update, context: ContextTypes.DEFA
         
         # ================= MENSAJE FINAL SEGÚN ROL ================= #
         if is_operator(user_id):
+            # Para operadores: mostrar información específica con límites
             message = f"✅ *Peer '{peer_name}' creado correctamente*\n\n"
             message += f"*Configuración:* {config_name}\n"
             message += f"*IP asignada:* `{allowed_ip}`\n"
@@ -3719,6 +3730,7 @@ async def generate_peer_automatically(update: Update, context: ContextTypes.DEFA
             message += f"• 🏷️ Nombre: `{peer_name}`\n"
             message += f"• 🌐 IP asignada: `{allowed_ip}`\n"
             message += f"• 🔗 DNS: `1.1.1.1`\n"
+            message += f"• 🌍 Endpoint: `{endpoint}`\n"  # AÑADIDO
             message += f"• ⏱️ Keepalive: `21`\n"
             message += f"• 📡 MTU: `1420`\n\n"
             message += f"*Claves generadas:*\n"
