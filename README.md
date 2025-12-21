@@ -51,15 +51,20 @@ pip install -r requirements.txt
 El bot utiliza variables de entorno. Crear un archivo .env en la raíz del proyecto
 
 TELEGRAM_BOT_TOKEN=
-WG_API_BASE_URL=https://url/api
-WG_API_KEY=
-WG_API_PREFIX=
-API_TIMEOUT=10
-LOG_FILE=wg_bot.log
-LOG_LEVEL=INFO
-MAX_PEERS_DISPLAY=10 
 
-Nunca subas el archivo .env a GitHub
+WG_API_BASE_URL=https://url/api
+
+WG_API_KEY=
+
+WG_API_PREFIX=
+
+API_TIMEOUT=10
+
+LOG_FILE=wg_bot.log
+
+LOG_LEVEL=INFO
+
+MAX_PEERS_DISPLAY=10 
 
 ## Ejecución del bot
 
