@@ -94,6 +94,7 @@ Algunos comandos pueden requerir permisos de operador
 ## Operadores y permisos
 
 El acceso al bot está restringido a operadores autorizados. La lógica de autorización se encuentra en el archivo operators.py donde se definen los IDs de Telegram permitidos y los niveles de acceso.
+Editar el archivo config.py donde se agregan los ID de los administradores y operadores.
 
 ## Logs
 
