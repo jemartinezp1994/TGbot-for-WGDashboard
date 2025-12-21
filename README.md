@@ -1,121 +1,118 @@
-# ?? WGDashboard Telegram Bot
+# ðŸ¤– WGDashboard Telegram Bot
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Telegram](https://img.shields.io/badge/Telegram-Bot-blue.svg)](https://telegram.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+Bot de Telegram para administrar y consultar informaciÃ³n de WireGuard mediante la API de WGDashboard. Permite a operadores autorizados gestionar peers, ver el estado del servidor y ejecutar acciones administrativas directamente desde Telegram.
 
-Bot de Telegram para administrar y consultar informaci¨®n de WireGuard mediante la API de WGDashboard. Permite a operadores autorizados gestionar peers, ver el estado del servidor y ejecutar acciones administrativas directamente desde Telegram.
+## CaracterÃ­sticas
 
----
+AutenticaciÃ³n de operadores autorizados  
+Consulta del estado del servidor WireGuard  
+Listado y gestiÃ³n de peers  
+ComunicaciÃ³n segura con la API de WGDashboard  
+MenÃºs interactivos con botones inline  
+Arquitectura modular  
+Sistema de logging centralizado  
+Script de gestiÃ³n para iniciar y detener el bot  
 
-## ? Caracter¨ªsticas
+## Estructura del proyecto
 
-- **?? Autenticaci¨®n de operadores autorizados** - Acceso restringido y seguro.
-- **?? Consulta del estado del servidor** - Monitoriza el estado de WireGuard al instante.
-- **?? Gesti¨®n completa de peers** - Lista, visualiza y administra los peers de WireGuard.
-- **??? Comunicaci¨®n segura** - Interacci¨®n protegida con la API de WGDashboard.
-- **??? Interfaz intuitiva** - Men¨²s interactivos con botones inline para una navegaci¨®n sencilla.
-- **??? Arquitectura modular** - C¨®digo organizado y preparado para ampliaciones.
-- **?? Sistema de logging centralizado** - Registros detallados para depuraci¨®n y seguimiento.
-- **?? Script de gesti¨®n** - Facilita el inicio y la detenci¨®n del servicio.
+bot/
+â”œâ”€â”€ main.py              Punto de entrada del bot  
+â”œâ”€â”€ config.py            ConfiguraciÃ³n y variables de entorno  
+â”œâ”€â”€ handlers.py          Handlers de comandos y callbacks  
+â”œâ”€â”€ keyboards.py         Teclados inline de Telegram  
+â”œâ”€â”€ operators.py         Control de operadores autorizados  
+â”œâ”€â”€ utils.py             Funciones utilitarias  
+â”œâ”€â”€ wg_api.py            Cliente de la API WGDashboard  
+â”œâ”€â”€ setup_logging.py     ConfiguraciÃ³n de logs  
+â”œâ”€â”€ manage.sh            Script para gestionar el bot  
+â”œâ”€â”€ requirements.txt     Dependencias del proyecto  
 
----
+## Requisitos
 
-## ?? Requisitos Previos
+Python 3.9 o superior  
+WireGuard instalado y configurado  
+WGDashboard funcionando  
+Bot de Telegram creado con @BotFather  
+Servidor Linux recomendado Ubuntu 20.04 o superior  
 
-- **Python 3.9** o superior.
-- **WireGuard** instalado y configurado.
-- **WGDashboard** funcionando y accesible.
-- Un **Bot de Telegram** creado con [@BotFather](https://t.me/botfather).
-- Servidor Linux (recomendado: **Ubuntu 20.04** o superior).
+## InstalaciÃ³n
 
----
+Clonar el repositorio
 
-## ?? Instalaci¨®n R¨¢pida
+git clone https://github.com/jemartinezp1994/TGbot-for-WGDashboard.git  
+cd wgdashboard-telegram-bot  
 
-**1. Clona el repositorio:** `git clone https://github.com/jemartinezp1994/TGbot-for-WGDashboard.git` y luego `cd wgdashboard-telegram-bot`
+Instalar dependencias
 
-**2. Instala las dependencias:** `pip install -r requirements.txt`
+pip install -r requirements.txt  
 
----
+## ConfiguraciÃ³n
 
-## ?? Configuraci¨®n
+El bot utiliza variables de entorno. Crear un archivo .env en la raÃ­z del proyecto
 
-El bot se configura mediante un archivo `.env`. Crea uno en la ra¨ªz del proyecto con el siguiente contenido:
+TELEGRAM_BOT_TOKEN=
+WG_API_BASE_URL=https://url/api
+WG_API_KEY=
+WG_API_PREFIX=
+API_TIMEOUT=10
+LOG_FILE=wg_bot.log
+LOG_LEVEL=INFO
+MAX_PEERS_DISPLAY=10 
 
-`TELEGRAM_BOT_TOKEN=TU_TOKEN_AQUI`  
-`WG_API_BASE_URL=https://tu_url_del_dashboard/api`  
-`WG_API_KEY=TU_API_KEY`  
-`WG_API_PREFIX=TU_PREFIJO`  
-`API_TIMEOUT=10`  
-`LOG_FILE=wg_bot.log`  
-`LOG_LEVEL=INFO`  
-`MAX_PEERS_DISPLAY=10`
+Nunca subas el archivo .env a GitHub
 
----
+## EjecuciÃ³n del bot
 
-## ?? Ejecuci¨®n
+EjecuciÃ³n directa
 
-**M¨¦todo 1: Ejecuci¨®n directa con Python** - `python main.py`
+python main.py  
 
-**M¨¦todo 2: Usando el script de gesti¨®n**  
-Primero, da permisos de ejecuci¨®n al script: `chmod +x manage.sh`  
-Para iniciar el bot: `./manage.sh start`  
-Para detenerlo: `./manage.sh stop`
+Usando el script de gestiÃ³n
 
----
+chmod +x manage.sh  
+./manage.sh start  
 
-## ?? Comandos Disponibles
+Para detener el bot
 
-| Comando | Descripci¨®n |
-| :--- | :--- |
-| `/start` | Inicia la interacci¨®n con el bot. |
-| `/menu` | Muestra el men¨² principal interactivo. |
-| `/status` | Consulta el estado actual del servidor WireGuard. |
-| `/peers` | Lista los peers configurados. |
-| `/help` | Muestra la gu¨ªa de ayuda y comandos. |
+./manage.sh stop  
 
-> **Nota:** Algunos comandos requieren permisos de operador.
+## Comandos del bot
 
----
+/start Inicia el bot  
+/menu Muestra el menÃº principal  
+/status Muestra el estado de WireGuard  
+/peers Lista los peers  
+/help Muestra ayuda  
 
-## ?? Gesti¨®n de Operadores
+Algunos comandos pueden requerir permisos de operador
 
-El acceso administrativo est¨¢ limitado a operadores autorizados. La gesti¨®n de permisos y la lista de IDs de Telegram permitidos se configuran en el m¨®dulo `bot/operators.py`.
+## Operadores y permisos
 
----
+El acceso al bot estÃ¡ restringido a operadores autorizados. La lÃ³gica de autorizaciÃ³n se encuentra en el archivo operators.py donde se definen los IDs de Telegram permitidos y los niveles de acceso.
 
-## ?? Logs
+## Logs
 
-El sistema de logging se configura en `bot/setup_logging.py`. Los registros se escriben por defecto en `wg_bot.log` e incluyen informaci¨®n, errores y eventos del sistema para facilitar el monitoreo.
+La configuraciÃ³n de logs se encuentra en setup_logging.py e incluye logs informativos, errores y eventos del sistema del bot.
 
----
+## Arquitectura
 
-## ?? Arquitectura
+Basado en python-telegram-bot v20+  
+Uso de programaciÃ³n asÃ­ncrona con asyncio  
+SeparaciÃ³n clara de responsabilidades  
+Preparado para ampliaciones futuras  
 
-- **Framework:** Basado en `python-telegram-bot` (v20.0+).
-- **Paradigma:** Programaci¨®n as¨ªncrona con `asyncio`.
-- **Dise?o:** Arquitectura modular con separaci¨®n clara de responsabilidades.
-- **Extensibilidad:** Estructura preparada para a?adir nuevas funcionalidades.
+## Despliegue recomendado
 
----
+VPS con Ubuntu 20.04 o superior  
+Ejecutar como servicio systemd o dentro de tmux  
+WGDashboard detrÃ¡s de nginx  
+Firewall activo y acceso restringido  
 
-## ?? Despliegue Recomendado
+## Licencia
 
-Para un entorno de producci¨®n estable:
-- **VPS** con **Ubuntu 20.04 LTS** o superior.
-- Ejecutar el bot como un **servicio systemd** para mayor robustez.
-- Ubicar **WGDashboard** detr¨¢s de un proxy inverso como **nginx**.
-- Asegurar el servidor con un **firewall activo** y pol¨ªticas de acceso restrictivas.
+Este proyecto se distribuye bajo la licencia MIT. Puedes usarlo, modificarlo y redistribuirlo libremente.
 
----
+## Autor
 
-## ?? Licencia
-
-Este proyecto est¨¢ bajo la **Licencia MIT**. Consulta el archivo `LICENSE` para m¨¢s detalles.
-
----
-
-## ????? Autor
-
-**Jorge Eli¨¢n Martinez Perdomo** - Bot de Telegram para administraci¨®n profesional de WireGuard usando WGDashboard
+Jorge EliÃ¡n Martinez Perdomo  
+Bot de Telegram para administraciÃ³n profesional de WireGuard usando WGDashboard
