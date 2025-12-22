@@ -1,6 +1,6 @@
 # 🤖 WGDashboard Telegram Bot
 
-Bot de Telegram para administrar y consultar información de WireGuard mediante la API de WGDashboard. Permite a operadores autorizados gestionar peers, ver el estado del servidor y ejecutar acciones administrativas directamente desde Telegram.
+### Bot de Telegram para administrar y consultar información de WireGuard mediante la API de WGDashboard. Permite a operadores autorizados gestionar peers, ver el estado del servidor y ejecutar acciones administrativas directamente desde Telegram.
 
 ## ✨ Características
 
