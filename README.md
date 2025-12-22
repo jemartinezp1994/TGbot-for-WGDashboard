@@ -93,11 +93,11 @@ El acceso al bot está restringido a operadores autorizados. La lógica de autor
 
 Para agregar operadores, edita el archivo config.py y agrega los IDs correspondientes.
 
-python
-# Administradores (acceso completo)
+
+### Administradores (acceso completo)
 ADMINS = [123456789, 987654321]
 
-# Operadores (acceso limitado)
+### Operadores (acceso limitado)
 OPERATORS = [112233445, 556677889]
 
 
