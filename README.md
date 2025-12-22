@@ -155,9 +155,9 @@ Ver archivo LICENSE para más detalles.
 Jorge Elián Martinez Perdomo
 Bot de Telegram para administración profesional de WireGuard usando WGDashboard
 
-### GitHub: @jemartinezp1994
+#### GitHub: @jemartinezp1994
 
-## Contribuciones
+### Contribuciones
 
 ### Las contribuciones son bienvenidas. Por favor:
 
