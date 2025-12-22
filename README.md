@@ -23,15 +23,25 @@ Bot de Telegram para administrar y consultar información de WireGuard mediante 
 ## 📁 Estructura del proyecto
 
 bot/
+
 ├── main.py              # Punto de entrada del bot  
+
 ├── config.py            # Configuración y variables de entorno  
+
 ├── handlers.py          # Handlers de comandos y callbacks  
+
 ├── keyboards.py         # Teclados inline de Telegram  
+
 ├── operators.py         # Control de operadores autorizados  
+
 ├── utils.py             # Funciones utilitarias  
+
 ├── wg_api.py            # Cliente de la API WGDashboard  
+
 ├── setup_logging.py     # Configuración de logs  
+
 ├── manage.sh            # Script para gestionar el bot  
+
 └── requirements.txt     # Dependencias del proyecto  
 
 text
@@ -80,13 +90,12 @@ python main.py
 
 ##  📋 Comandos del bot
 
-Comando	                Descripción                         	Permisos
-
-/start	                Inicia el bot   	                    Todos
-/menu	                  Muestra el menú principal	            Operadores
-/status	                Muestra el estado de WireGuard	      Operadores
-/peers	                Lista los peers	                      Operadores
-/help	                  Muestra ayuda	                        Todos
+Comando	Descripción
+/start	Inicia el bot
+/menu	Muestra el menú principal
+/status	Muestra el estado de WireGuard
+/peers	Lista los peers
+/help	Muestra ayuda
 
 ###  ⚠️ Algunos comandos pueden requerir permisos de operador.
 
@@ -157,7 +166,7 @@ Ver archivo LICENSE para más detalles.
 Jorge Elián Martinez Perdomo
 Bot de Telegram para administración profesional de WireGuard usando WGDashboard
 
-## GitHub: @jemartinezp1994
+### GitHub: @jemartinezp1994
 
 ## Contribuciones
 Las contribuciones son bienvenidas. Por favor:
