@@ -162,14 +162,15 @@ Bot de Telegram para administración profesional de WireGuard usando WGDashboard
 ### GitHub: @jemartinezp1994
 
 ## Contribuciones
-Las contribuciones son bienvenidas. Por favor:
 
-Fork el repositorio
+### Las contribuciones son bienvenidas. Por favor:
 
-Crea una rama para tu feature (git checkout -b feature/AmazingFeature)
+- Fork el repositorio
 
-Commit tus cambios (git commit -m 'Add AmazingFeature')
+- Crea una rama para tu feature (git checkout -b feature/AmazingFeature)
 
-Push a la rama (git push origin feature/AmazingFeature)
+- Commit tus cambios (git commit -m 'Add AmazingFeature')
 
-Abre un Pull Request
+- Push a la rama (git push origin feature/AmazingFeature)
+
+- Abre un Pull Request
