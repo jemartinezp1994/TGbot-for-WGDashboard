@@ -23,7 +23,6 @@ Bot de Telegram para administrar y consultar información de WireGuard mediante 
 ## 📁 Estructura del proyecto
 
 bot/
-
 ├── main.py                        # Punto de entrada del bot  
 ├── config.py                      # Configuración y variables de entorno  
 ├── handlers.py                    # Handlers de comandos y callbacks  
@@ -80,10 +79,15 @@ python main.py
 ##  📋 Comandos del bot
 
 Comando	Descripción
+
 /start	Inicia el bot
+
 /menu	Muestra el menú principal
+
 /status	Muestra el estado de WireGuard
+
 /peers	Lista los peers
+
 /help	Muestra ayuda
 
 ###  ⚠️ Algunos comandos pueden requerir permisos de operador.
