@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ContextTypes
+import html
 
 from config import ALLOWED_USERS, MAX_PEERS_DISPLAY, ROLE_ADMIN, ROLE_OPERATOR
 from operators import operators_db
@@ -374,3 +375,48 @@ def escape_markdown(text: str) -> str:
     
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return ''.join(['\\' + char if char in escape_chars else char for char in text])
+
+# ================= SISTEMA DE MENSAJES SEGUROS ================= #
+def safe_message(text: str, parse_mode: str = "HTML", **kwargs) -> dict:
+    """
+    Crea mensajes seguros para Telegram con escape automático de variables.
+    
+    Args:
+        text: Texto del mensaje con placeholders {nombre_variable}
+        parse_mode: "HTML" (recomendado) o "Markdown"
+        **kwargs: Variables para reemplazar en el texto
+        
+    Returns:
+        dict: Diccionario listo para usar con ** en reply_text/edit_message_text
+        
+    Ejemplo:
+        message_data = safe_message(
+            "ℹ️ <b>Información de {peer}</b>\\n"
+            "<b>Config:</b> {config}\\n"
+            "<b>IP:</b> <code>{ip}</code>",
+            peer=peer_name,
+            config=config_name,
+            ip=allowed_ip,
+            parse_mode="HTML"
+        )
+        await update.message.reply_text(**message_data)
+    """
+    if parse_mode == "HTML":
+        # Escapar todas las variables para HTML
+        escaped_kwargs = {k: html.escape(str(v)) for k, v in kwargs.items()}
+        formatted_text = text.format(**escaped_kwargs)
+    elif parse_mode == "Markdown":
+        # Escapar para Markdown
+        escaped_kwargs = {}
+        for k, v in kwargs.items():
+            str_v = str(v)
+            escaped_v = escape_markdown(str_v)
+            escaped_kwargs[k] = escaped_v
+        formatted_text = text.format(**escaped_kwargs)
+    else:
+        # Texto plano
+        escaped_kwargs = {k: str(v) for k, v in kwargs.items()}
+        formatted_text = text.format(**escaped_kwargs)
+        parse_mode = None
+    
+    return {"text": formatted_text, "parse_mode": parse_mode}

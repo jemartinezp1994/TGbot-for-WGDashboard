@@ -2387,22 +2387,30 @@ async def handle_schedule_job_peer_selected(query, context: CallbackContext, con
         'peer_name': peer_name
     }
     
-    message = f"⏰ *Schedule Jobs para {peer_name}*\n\n"
-    message += f"*Configuración:* {config_name}\n"
-    message += f"*Peer:* {peer_name}\n\n"
+    # ESCAPAR CARACTERES ESPECIALES usando html.escape()
+    import html
+    peer_name_escaped = html.escape(peer_name)
+    config_name_escaped = html.escape(config_name)
+    
+    # Usar HTML en lugar de Markdown
+    message = f"<b>⏰ Schedule Jobs para {peer_name_escaped}</b>\n\n"
+    message += f"<b>Configuración:</b> {config_name_escaped}\n"
+    message += f"<b>Peer:</b> {peer_name_escaped}\n\n"
     
     if jobs:
-        message += f"*Jobs activos:* {len(jobs)}\n\n"
+        message += f"<b>Jobs activos:</b> {len(jobs)}\n\n"
         for i, job in enumerate(jobs, 1):
-            message += f"{i}. {format_schedule_job_for_list(job)}\n"
+            # También escapar el texto del job
+            job_text = html.escape(format_schedule_job_for_list(job))
+            message += f"{i}. {job_text}\n"
         message += "\n"
     else:
-        message += "ℹ️ *No hay jobs programados activos.*\n"
+        message += "ℹ️ <b>No hay jobs programados activos.</b>\n"
         message += "Puedes agregar nuevos jobs usando los botones.\n\n"
     
-    message += "*Agregar nuevo Job:*\n"
-    message += "• *Límite de datos*: Agrega un límite en GB\n"
-    message += "• *Fecha de expiración*: Agrega una fecha de expiración"
+    message += "<b>Agregar nuevo Job:</b>\n"
+    message += "• <b>Límite de datos</b>: Agrega un límite en GB\n"
+    message += "• <b>Fecha de expiración</b>: Agrega una fecha de expiración"
     
     # Crear teclado
     keyboard = []
@@ -2428,7 +2436,7 @@ async def handle_schedule_job_peer_selected(query, context: CallbackContext, con
     await query.edit_message_text(
         message,
         reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        parse_mode="HTML"  # CAMBIADO de "Markdown" a "HTML"
     )
 
 async def handle_add_schedule_job_data(query, context: CallbackContext, config_name: str, peer_index: str):
@@ -2806,16 +2814,21 @@ async def handle_delete_schedule_job_execute(query, context: CallbackContext, co
         result = api_client.delete_schedule_job(config_name, public_key, job_id, job_data=job)
         
         if result.get("status"):
+            # ESCAPAR CARACTERES HTML
+            peer_name_escaped = html.escape(peer_name)
+            job_info_escaped = html.escape(job_info)
+            config_name_escaped = html.escape(config_name)
+            
             await query.edit_message_text(
-                f"✅ *Schedule Job eliminado correctamente*\n\n"
-                f"*Peer:* {peer_name}\n"
-                f"*Job eliminado:* {job_info}\n\n"
+                f"✅ <b>Schedule Job eliminado correctamente</b>\n\n"
+                f"<b>Peer:</b> {peer_name_escaped}\n"
+                f"<b>Job eliminado:</b> {job_info_escaped}\n\n"
                 f"El job ha sido eliminado permanentemente.",
                 reply_markup=back_button(f"schedule_job_peer:{config_name}:{idx}"),
-                parse_mode="Markdown"
+                parse_mode="HTML"  # CAMBIADO A HTML
             )
         else:
-            error_msg = result.get('message', 'Error desconocido')
+            error_msg = html.escape(result.get('message', 'Error desconocido'))
             
             # Ofrecer opciones alternativas
             keyboard = [
@@ -2830,25 +2843,26 @@ async def handle_delete_schedule_job_execute(query, context: CallbackContext, co
             ]
             
             await query.edit_message_text(
-                f"❌ *Error al eliminar Schedule Job*\n\n"
-                f"*Job:* {job_info}\n"
-                f"*Error:* {error_msg}\n\n"
-                f"*Posibles soluciones:*\n"
+                f"❌ <b>Error al eliminar Schedule Job</b>\n\n"
+                f"<b>Job:</b> {job_info_escaped}</b>\n"
+                f"<b>Error:</b> {error_msg}\n\n"
+                f"<b>Posibles soluciones:</b>\n"
                 f"1. Intenta eliminar manualmente desde el dashboard web\n"
                 f"2. Verifica que el job aún exista\n"
                 f"3. Contacta al administrador del sistema",
                 reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="Markdown"
+                parse_mode="HTML"  # CAMBIADO A HTML
             )
     
     except Exception as e:
         logger.error(f"Error al eliminar schedule job: {str(e)}", exc_info=True)
+        error_msg = html.escape(str(e))
         await query.edit_message_text(
-            f"❌ *Error al eliminar Schedule Job*\n\n"
-            f"*Error:* {str(e)}\n\n"
+            f"❌ <b>Error al eliminar Schedule Job</b>\n\n"
+            f"<b>Error:</b> {error_msg}\n\n"
             f"Intenta eliminar manualmente desde el dashboard web.",
             reply_markup=back_button(f"schedule_job_peer:{config_name}:{peer_index}"),
-            parse_mode="Markdown"
+            parse_mode="HTML"  # CAMBIADO A HTML
         )
 
 async def handle_system_status(query):
@@ -3370,31 +3384,32 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 del context.user_data[key]
         
         if result.get("status"):
+            # Usar el nuevo sistema seguro
+            from utils import safe_message
+            
+            message_data = safe_message(
+                "✅ <b>Schedule Job creado correctamente</b>\n\n"
+                "<b>Peer:</b> {peer_name}\n"
+                "<b>Configuración:</b> {config_name}\n"
+                "<b>Acción:</b> RESTRICT\n"
+                "<b>Campo:</b> {field_display}\n"
+                "<b>Valor:</b> {value_display}\n\n"
+                "El peer será restringido cuando se alcance el límite o la fecha.",
+                parse_mode="HTML",
+                peer_name=peer_name,
+                config_name=config_name,
+                field_display=field_display,
+                value_display=value_display
+            )
+            
             await update.message.reply_text(
-                f"✅ *Schedule Job creado correctamente*\n\n"
-                f"*Peer:* {peer_name}\n"
-                f"*Configuración:* {config_name}\n"
-                f"*Acción:* RESTRICT\n"
-                f"*Campo:* {field_display}\n"
-                f"*Valor:* {value_display}\n\n"
-                f"El peer será restringido cuando se alcance el límite o la fecha.",
+                **message_data,
                 reply_markup=InlineKeyboardMarkup([
                     [
                         InlineKeyboardButton("⬅️ Volver a Schedule Jobs", callback_data=f"schedule_job_peer:{config_name}:{peer_index}"),
                         InlineKeyboardButton("➕ Agregar otro Job", callback_data=f"schedule_job_peer:{config_name}:{peer_index}")
                     ]
-                ]),
-                parse_mode="Markdown"
-            )
-        else:
-            error_msg = result.get('message', 'Error desconocido')
-            await update.message.reply_text(
-                f"❌ *Error al crear Schedule Job*\n\n*Error:* {error_msg}\n\n"
-                f"Intenta nuevamente o crea el job manualmente desde el dashboard.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⬅️ Volver a Schedule Jobs", callback_data=f"schedule_job_peer:{config_name}:{peer_index}")]
-                ]),
-                parse_mode="Markdown"
+                ])
             )
         
         return
