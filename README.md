@@ -124,13 +124,14 @@ WGDashboard detrás de nginx
 Firewall activo y acceso restringido
 
 ### Configurar como servicio systemd
-bash
-``` bash sudo nano /etc/systemd/system/wg-bot.service
+
+```
+sudo nano /etc/systemd/system/wg-bot.service
 ```
 
 Agrega el siguiente contenido:
 
-``` bash [Unit]
+``` [Unit]
 Description=WGDashboard Telegram Bot
 After=network.target
 
