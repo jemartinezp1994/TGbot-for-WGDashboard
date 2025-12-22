@@ -5,19 +5,12 @@
 ## ✨ Características
 
 ✅ Autenticación de operadores autorizados
-
 ✅ Consulta del estado del servidor WireGuard
-
 ✅ Listado y gestión de peers
-
 ✅ Comunicación segura con la API de WGDashboard
-
 ✅ Menús interactivos con botones inline
-
 ✅ Arquitectura modular
-
 ✅ Sistema de logging centralizado
-
 ✅ Script de gestión para iniciar y detener el bot  
 
 ## 📁 Estructura del proyecto
