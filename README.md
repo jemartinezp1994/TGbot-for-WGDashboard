@@ -85,7 +85,7 @@ Comando	Descripción
 
 /help	Muestra ayuda
 
-###  ⚠️ Algunos comandos pueden requerir permisos de operador.
+⚠️ Algunos comandos pueden requerir permisos de operador.
 
 ##   🔐 Operadores y permisos
 
