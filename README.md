@@ -23,17 +23,17 @@ Bot de Telegram para administrar y consultar información de WireGuard mediante 
 ## 📁 Estructura del proyecto
 
 ```plaintext
-bot/
-├── main.py              # Punto de entrada del bot
-├── config.py            # Configuración y variables de entorno
-├── handlers.py          # Handlers de comandos y callbacks
-├── keyboards.py         # Teclados inline de Telegram
-├── operators.py         # Control de operadores autorizados
-├── utils.py             # Funciones utilitarias
-├── wg_api.py            # Cliente de la API WGDashboard
-├── setup_logging.py     # Configuración de logs
-├── manage.sh            # Script para gestionar el bot
-└── requirements.txt     # Dependencias del proyecto
+📂 bot/
+├── 📄 main.py              # Punto de entrada del bot
+├── ⚙️ config.py            # Configuración y variables de entorno
+├── 🎮 handlers.py          # Handlers de comandos y callbacks
+├── ⌨️ keyboards.py         # Teclados inline de Telegram
+├── 👥 operators.py         # Control de operadores autorizados
+├── 🛠️ utils.py             # Funciones utilitarias
+├── 🔌 wg_api.py            # Cliente de la API WGDashboard
+├── 📝 setup_logging.py     # Configuración de logs
+├── 🚀 manage.sh            # Script para gestionar el bot
+└── 📦 requirements.txt     # Dependencias del proyecto
 ```
 
 ## 🛠️ Requisitos
